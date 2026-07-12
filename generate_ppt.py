@@ -78,7 +78,7 @@ badge.fill.solid()
 badge.fill.fore_color.rgb = RGBColor(0x1E, 0x10, 0x3A)
 badge.line.color.rgb = RGBColor(0x4C, 0x1D, 0x95)
 tf = badge.text_frame
-tf.paragraphs[0].text = "🚀  Launching August 2026"
+tf.paragraphs[0].text = "🍏  v1 now in beta — Mac desktop"
 tf.paragraphs[0].font.size = Pt(14)
 tf.paragraphs[0].font.color.rgb = PURPLE
 tf.paragraphs[0].alignment = PP_ALIGN.CENTER
@@ -99,7 +99,7 @@ add_text_box(slide, Inches(2), Inches(4.8), Inches(9.3), Inches(0.8),
 
 # Bottom tag
 add_text_box(slide, Inches(3), Inches(6.5), Inches(7.3), Inches(0.5),
-    "Built for India  ·  ₹199/mo  ·  DPDP Compliant",
+    "v1 in beta  ·  Mac only  ·  Free during beta  ·  Android soon",
     font_size=14, bold=False, color=DARK_GRAY, align=PP_ALIGN.CENTER)
 
 
@@ -528,22 +528,22 @@ set_bg(slide)
 add_text_box(slide, Inches(0.8), Inches(0.5), Inches(2), Inches(0.4),
     "BUILD PLAN", font_size=12, bold=True, color=PURPLE)
 add_text_box(slide, Inches(0.8), Inches(1), Inches(11), Inches(0.8),
-    "Solo founder + Claude = 8 weeks to MVP",
+    "v1 is shipping. Here's what's next.",
     font_size=36, bold=True, color=WHITE)
 
-# Timeline
+# Timeline — with v1 completed
 phases = [
-    ("Weeks 1-2", "Desktop MVP", "Record system audio →\nTranscribe → LLM notes\nDesktop app (Tauri)"),
-    ("Weeks 3-4", "Mobile App", "Mic recording +\ntranscription.\nCloud sync."),
-    ("Weeks 5-6", "Calendar + Chat", "Calendar sync,\nmeeting detection,\nAI chat interface"),
-    ("Weeks 7-8", "WhatsApp + Launch", "WhatsApp/VoIP capture.\nBeta testing.\nPublic launch."),
+    ("✅ COMPLETED", "v1 — Mac Desktop", "System audio capture\nWhisper on-device transcription\nLLM note generation\nBasic UI + meeting history"),
+    ("⚠️ IN PROGRESS", "Calendar + Chat", "Google Calendar sync\nMeeting detection\nAI chat interface\nUser auth & sync"),
+    ("📅 NEXT", "Mobile Apps", "iOS mic recording\nAndroid capture\nIn-person meeting mode\nCross-device sync"),
+    ("📅 NEXT", "WhatsApp + Scale", "WhatsApp desktop capture\nOnboarding & referral\nAndroid + Windows\n₹199/mo launch"),
 ]
 
 for i, (phase, title, desc) in enumerate(phases):
     x = Inches(0.8 + i * 3.15)
     card = add_rect(slide, x, Inches(2.1), Inches(2.85), Inches(3.0), LIGHT_BG, BORDER)
     add_text_box(slide, x + Inches(0.3), Inches(2.25), Inches(2.25), Inches(0.3),
-        phase, font_size=11, bold=True, color=PURPLE)
+        phase, font_size=11, bold=True, color=GREEN if 'COMPLETED' in phase else PURPLE)
     add_text_box(slide, x + Inches(0.3), Inches(2.6), Inches(2.25), Inches(0.4),
         title, font_size=18, bold=True, color=WHITE)
     add_text_box(slide, x + Inches(0.3), Inches(3.1), Inches(2.25), Inches(1.2),
