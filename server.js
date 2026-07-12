@@ -3,6 +3,7 @@ const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
 const nodemailer = require('nodemailer');
+require('dotenv').config();
 
 const app = express();
 app.use(cors());
@@ -12,10 +13,9 @@ app.use(express.static(__dirname));
 const DATA_FILE = path.join(__dirname, 'waitlist.json');
 const PORT = process.env.PORT || 3000;
 
-// Email config — set these in a .env file or replace directly
-const EMAIL_TO = 'sangkalbe@gmail.com';
-const EMAIL_FROM = process.env.EMAIL_FROM || 'notemeet.waitlist@gmail.com';
-const EMAIL_PASS = process.env.EMAIL_PASS || ''; // Gmail App Password
+const EMAIL_TO = process.env.EMAIL_TO || 'sangkalbe@gmail.com';
+const EMAIL_FROM = process.env.EMAIL_FROM;
+const EMAIL_PASS = process.env.EMAIL_PASS;
 
 const transporter = nodemailer.createTransport({
   service: 'gmail',

@@ -9,13 +9,40 @@ AI meeting notes without a bot. Works for online meetings, WhatsApp calls, and i
 - On-device processing (DPDP compliant)
 - ₹199/mo (vs ₹1,500 for Fireflies/Granola)
 
-## Local Dev
+## Quick Start
+
 ```bash
-python3 -m http.server 8000
-# or
-npx serve .
+# Install dependencies
+npm install
+
+# Set up email (Gmail App Password)
+npm run setup
+
+# Start the server
+npm start
 ```
 
+## Email Setup
+
+To receive waitlist signups via email:
+
+1. Go to https://myaccount.google.com/apppasswords
+2. Select "Mail" + your device → generate a 16-char password
+3. Run `npm run setup` and enter the password
+
+Alternatively, create a `.env` file:
+```
+EMAIL_TO=sangkalbe@gmail.com
+EMAIL_FROM=your-email@gmail.com
+EMAIL_PASS=your-16-char-app-password
+```
+
+## Deploy
+
+- **Static site**: Push to GitHub and enable Pages (branch: `main`, folder: `/`)
+- **API server**: Deploy `server.js` to Render/Railway (free tier)
+
 ## Built With
-- Vanilla HTML/CSS/JS
-- Hosted on GitHub Pages
+- HTML/CSS/JS
+- Express + Nodemailer
+- GitHub Pages

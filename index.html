@@ -257,9 +257,7 @@
     }
     .waitlist-form button:hover { transform: translateY(-1px); box-shadow: 0 4px 20px rgba(124,58,237,0.4); }
     .waitlist-form button:disabled { opacity: 0.5; cursor: not-allowed; }
-    .waitlist-msg { margin-top: 16px; font-size: 14px; min-height: 24px; }
-    .waitlist-msg.success { color: #34d399; }
-    .waitlist-msg.error { color: #ef4444; }
+    .waitlist-success { margin-top: 16px; font-size: 16px; min-height: 24px; color: #34d399; font-weight: 600; }
 
     /* Footer */
     footer {
@@ -505,9 +503,14 @@
   <section class="waitlist" id="waitlist">
     <h2>🐣 Launching August 2026</h2>
     <p>Be the first to try NoteMeet. Join the private beta — we're onboarding founders and tech teams first.</p>
+
+    <div class="waitlist-success" id="waitlistSuccess" style="display:none;">
+      🎉 You're on the list! We'll email you when we launch.
+    </div>
+
     <form class="waitlist-form" id="waitlistForm">
-      <input type="email" id="email" placeholder="Your email" required>
-      <select id="role" required>
+      <input type="email" id="email" name="email" placeholder="Your email" required>
+      <select id="role" name="role" required>
         <option value="">I am a...</option>
         <option value="founder">Founder / C-suite</option>
         <option value="engineer">Engineering Manager</option>
@@ -517,7 +520,6 @@
       </select>
       <button type="submit" id="submitBtn">Join Waitlist →</button>
     </form>
-    <div class="waitlist-msg" id="waitlistMsg"></div>
   </section>
 
   <!-- Footer -->
@@ -542,10 +544,16 @@
 
     document.querySelectorAll('.fade-in').forEach(el => observer.observe(el));
 
-    // Waitlist form
+    // Show success if redirected from Web3Forms
+    if (window.location.search.includes('success=true')) {
+      document.getElementById('waitlistForm').style.display = 'none';
+      document.getElementById('waitlistSuccess').style.display = 'block';
+    }
+
+    // Waitlist form — submit to our API
     const form = document.getElementById('waitlistForm');
-    const msg = document.getElementById('waitlistMsg');
     const submitBtn = document.getElementById('submitBtn');
+    const successDiv = document.getElementById('waitlistSuccess');
 
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -553,8 +561,7 @@
       const role = document.getElementById('role').value;
 
       if (!email || !role) {
-        msg.className = 'waitlist-msg error';
-        msg.textContent = 'Please fill in all fields.';
+        alert('Please fill in all fields.');
         return;
       }
 
@@ -562,29 +569,34 @@
       submitBtn.textContent = 'Joining...';
 
       try {
-        const res = await fetch('https://api.web3forms.com/submit', {
+        const res = await fetch('/api/waitlist', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            access_key: 'ab08243e-5f08-40b3-b358-416eca4699b3',
-            email: email,
-            role: role,
-            subject: 'New NoteMeet Waitlist Signup',
-            from_name: 'NoteMeet Waitlist'
-          })
+          body: JSON.stringify({ email, role })
         });
 
         if (res.ok) {
-          msg.className = 'waitlist-msg success';
-          msg.textContent = '🎉 You\'re on the list! We\'ll email you when we launch.';
-          form.reset();
+          form.style.display = 'none';
+          successDiv.style.display = 'block';
         } else {
-          throw new Error('Submission failed');
+          const data = await res.json();
+          alert(data.error || 'Something went wrong. Try again.');
         }
       } catch {
-        msg.className = 'waitlist-msg success';
-        msg.textContent = '🎉 Got it! We\'ll be in touch soon.';
-        form.reset();
+        // Fallback: save via Web3Forms if our server is down
+        try {
+          await fetch('https://api.web3forms.com/submit', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              access_key: 'ab08243e-5f08-40b3-b358-416eca4699b3',
+              email, role,
+              subject: 'NoteMeet Waitlist (fallback)'
+            })
+          });
+        } catch {}
+        form.style.display = 'none';
+        successDiv.style.display = 'block';
       }
 
       submitBtn.disabled = false;
