@@ -303,7 +303,174 @@ add_text_box(slide, Inches(1.2), Inches(5.8), Inches(11), Inches(0.8),
     font_size=15, bold=True, color=GREEN, align=PP_ALIGN.CENTER)
 
 
-# ========== SLIDE 7: BUSINESS MODEL ==========
+# ========== SLIDE 7: WHY NO PHONE CALLS ==========
+slide = prs.slides.add_slide(prs.slide_layouts[6])
+set_bg(slide)
+
+add_text_box(slide, Inches(0.8), Inches(0.5), Inches(2), Inches(0.4),
+    "THE ELEPHANT IN THE ROOM", font_size=12, bold=True, color=PURPLE)
+add_text_box(slide, Inches(0.8), Inches(1), Inches(11), Inches(0.8),
+    "Why doesn't anyone support mobile call recording?",
+    font_size=36, bold=True, color=WHITE)
+add_text_box(slide, Inches(0.8), Inches(1.7), Inches(11), Inches(0.5),
+    "Apple and Google have made it technically impossible for third-party apps. Here's exactly why.",
+    font_size=16, color=GRAY)
+
+# iOS column
+ios_card = add_rect(slide, Inches(0.8), Inches(2.4), Inches(5.7), Inches(4.6), LIGHT_BG, BORDER)
+add_text_box(slide, Inches(1.1), Inches(2.6), Inches(5.1), Inches(0.4),
+    "🍎  iPhone (iOS)", font_size=20, bold=True, color=WHITE)
+
+ios_reasons = [
+    ("🔒  iOS blocks ALL call audio access",
+     "Apple provides zero APIs to capture cellular call audio. It's a deliberate privacy decision — no third-party app can listen to your phone calls."),
+    ("🎤  Mic is disabled during calls",
+     "When a cellular call is active, iOS stops giving microphone access to other apps. Any app that tries to record gets silence."),
+    ("📁  iOS 18 recording is sandboxed",
+     "Apple's built-in call recording (iOS 18.1+) exists, but recordings are locked inside the Phone app. No share button. No export. No API to access them."),
+    ("📞  VoIP calls (WhatsApp) work — partially",
+     "WhatsApp calls on iOS go through VoIP APIs. ReplayKit can capture screen+audio but shows a prominent green 'Recording' banner — awkward in a business call."),
+]
+
+tf = add_text_box(slide, Inches(1.1), Inches(3.15), Inches(5.1), Inches(3.6), "", font_size=13, color=GRAY)
+for title, desc in ios_reasons:
+    p = tf.add_paragraph()
+    p.text = title
+    p.font.size = Pt(14)
+    p.font.bold = True
+    p.font.color.rgb = WHITE
+    p.font.name = 'Inter'
+    p2 = tf.add_paragraph()
+    p2.text = desc
+    p2.font.size = Pt(11)
+    p2.font.color.rgb = GRAY
+    p2.font.name = 'Inter'
+    p2.space_after = Pt(10)
+
+# Android column
+android_card = add_rect(slide, Inches(6.8), Inches(2.4), Inches(5.7), Inches(4.6), LIGHT_BG, BORDER)
+add_text_box(slide, Inches(7.1), Inches(2.6), Inches(5.1), Inches(0.4),
+    "🤖  Android", font_size=20, bold=True, color=WHITE)
+
+android_reasons = [
+    ("🔇  VOICE_CALL source blocked in Android 10+",
+     "Android used to have a 'VOICE_CALL' audio source for recording calls. Google removed it in Android 10. Now it returns encrypted/empty audio."),
+    ("🚫  Play Store banned call recording apps",
+     "Since 2023, Google Play blocks apps that use AccessibilityService for call recording. You can only sideload — impossible for mass market."),
+    ("🏭  OEMs have their own recorders",
+     "Xiaomi, Samsung, OnePlus ship built-in call recording in India ROMs. But it's locked to their dialer — third-party apps can't access it."),
+    ("🛠️  The only way? Root the phone",
+     "Apps like ACR need root access. Less than 0.5% of Indian users root their phones. Not a viable product strategy."),
+]
+
+tf = add_text_box(slide, Inches(7.1), Inches(3.15), Inches(5.1), Inches(3.6), "", font_size=13, color=GRAY)
+for title, desc in android_reasons:
+    p = tf.add_paragraph()
+    p.text = title
+    p.font.size = Pt(14)
+    p.font.bold = True
+    p.font.color.rgb = WHITE
+    p.font.name = 'Inter'
+    p2 = tf.add_paragraph()
+    p2.text = desc
+    p2.font.size = Pt(11)
+    p2.font.color.rgb = GRAY
+    p2.font.name = 'Inter'
+    p2.space_after = Pt(10)
+
+# Bottom conclusion
+conclusion = add_rect(slide, Inches(0.8), Inches(7.25), Inches(11.7), Inches(0.5), RGBColor(0x1E, 0x10, 0x3A), RGBColor(0x4C, 0x1D, 0x95))
+add_text_box(slide, Inches(1.1), Inches(7.3), Inches(11.1), Inches(0.35),
+    "Granola tries but fails: iOS phone calls India is blocked. WhatsApp mobile calls can't be captured cleanly. The industry's best answer is 'desktop-only.'",
+    font_size=12, bold=False, color=PURPLE, align=PP_ALIGN.CENTER)
+
+
+# ========== SLIDE 8: OUR APPROACH TO WHATSAPP ==========
+slide = prs.slides.add_slide(prs.slide_layouts[6])
+set_bg(slide)
+
+add_text_box(slide, Inches(0.8), Inches(0.5), Inches(2), Inches(0.4),
+    "OUR APPROACH", font_size=12, bold=True, color=PURPLE)
+add_text_box(slide, Inches(0.8), Inches(1), Inches(11), Inches(0.8),
+    "How we handle WhatsApp & phone calls (honestly)",
+    font_size=36, bold=True, color=WHITE)
+
+# What we DO support
+do_card = add_rect(slide, Inches(0.8), Inches(2.1), Inches(5.7), Inches(3.0), LIGHT_BG, BORDER)
+add_text_box(slide, Inches(1.1), Inches(2.3), Inches(5.1), Inches(0.4),
+    "✅  What We Support", font_size=18, bold=True, color=GREEN)
+
+do_items = [
+    ("Desktop WhatsApp Web calls", "System audio capture on Mac/Windows — clean, no banner, works automatically. This covers most work-related WhatsApp calls in India."),
+    ("Online meetings", "Zoom, Google Meet, Teams, Webex — via system audio. No bot joins your call."),
+    ("In-person conversations", "Mobile app mic recording. Works offline. Perfect for client meetings."),
+    ("Outbound calls via in-app dialer (future)", "SIP-based dialer (like Truecaller) — user dials through our app, we merge recording. Works on iOS + Android."),
+]
+
+tf = add_text_box(slide, Inches(1.1), Inches(2.9), Inches(5.1), Inches(2.0), "", font_size=12, color=GRAY)
+for title, desc in do_items:
+    p = tf.add_paragraph()
+    p.text = "→  " + title
+    p.font.size = Pt(13)
+    p.font.bold = True
+    p.font.color.rgb = WHITE
+    p.font.name = 'Inter'
+    p2 = tf.add_paragraph()
+    p2.text = desc
+    p2.font.size = Pt(11)
+    p2.font.color.rgb = GRAY
+    p2.font.name = 'Inter'
+    p2.space_after = Pt(8)
+
+# What we DON'T support
+dont_card = add_rect(slide, Inches(6.8), Inches(2.1), Inches(5.7), Inches(3.0), LIGHT_BG, BORDER)
+add_text_box(slide, Inches(7.1), Inches(2.3), Inches(5.1), Inches(0.4),
+    "❌  What We Cannot Do (honest)", font_size=18, bold=True, color=RGBColor(0xEF, 0x44, 0x44))
+
+dont_items = [
+    ("Mobile WhatsApp calls (no workaround)", "iOS blocks it. Android blocks it. Even Granola, Otter, Fireflies can't do it. We won't pretend otherwise."),
+    ("Incoming native phone calls", "iOS: no API. Android: blocked. Granola tried via SIP dialer but India is banned. No third-party app in the world supports this cleanly."),
+    ("Recording without user awareness", "All recording requires user intent (tap record). No always-listening. Good privacy = deliberate action."),
+]
+
+tf = add_text_box(slide, Inches(7.1), Inches(2.9), Inches(5.1), Inches(2.0), "", font_size=12, color=GRAY)
+for title, desc in dont_items:
+    p = tf.add_paragraph()
+    p.text = "✗  " + title
+    p.font.size = Pt(13)
+    p.font.bold = True
+    p.font.color.rgb = RGBColor(0xEF, 0x44, 0x44)
+    p.font.name = 'Inter'
+    p2 = tf.add_paragraph()
+    p2.text = desc
+    p2.font.size = Pt(11)
+    p2.font.color.rgb = GRAY
+    p2.font.name = 'Inter'
+    p2.space_after = Pt(8)
+
+# Market context
+context = add_rect(slide, Inches(0.8), Inches(5.5), Inches(11.7), Inches(1.8), LIGHT_BG, BORDER)
+add_text_box(slide, Inches(1.1), Inches(5.7), Inches(11.1), Inches(0.4),
+    "📊  Market Context — Why This Still Wins", font_size=18, bold=True, color=BLUE)
+
+context_items = [
+    "🗣️  90%+ of professional conversations in India happen on: Zoom/Meet (desktop) + in-person + WhatsApp Web (desktop) — all three we support.",
+    "📱  Mobile WhatsApp calls are mostly personal (family, friends). Professionals use WhatsApp Web on laptop for work calls.",
+    "🏆  Granola has a $125M valuation and ALSO cannot do mobile WhatsApp calls. Nobody can. This is not a weakness — it's the industry reality.",
+    "💡  When Apple/Google eventually open call recording APIs (pressure from regulators), we'll be first to integrate. Until then, we ship what works.",
+]
+
+tf = add_text_box(slide, Inches(1.1), Inches(6.2), Inches(11.1), Inches(1.0), "", font_size=12, color=GRAY)
+for item in context_items:
+    p = tf.add_paragraph()
+    p.text = item
+    p.font.size = Pt(11)
+    p.font.color.rgb = GRAY
+    p.font.name = 'Inter'
+    p.space_after = Pt(4)
+
+
+# ========== SLIDE 9: BUSINESS MODEL ==========
 slide = prs.slides.add_slide(prs.slide_layouts[6])
 set_bg(slide)
 

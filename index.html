@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>NoteMeet — AI Notepad for Indian Teams</title>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
   <style>
     *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
     html { scroll-behavior: smooth; }
@@ -526,7 +527,7 @@
     </div>
 
     <form class="waitlist-form" id="waitlistForm">
-      <input type="email" id="email" name="email" placeholder="Your email" required>
+      <input type="email" id="email" name="email" placeholder="Your email" required autocomplete="email">
       <select id="role" name="role" required>
         <option value="">I am a...</option>
         <option value="founder">Founder / C-suite</option>
@@ -535,6 +536,12 @@
         <option value="designer">Design Manager</option>
         <option value="other">Other professional</option>
       </select>
+
+      <!-- Honeypot — hidden from humans, bots fill it -->
+      <input type="text" name="website" id="honeypot" tabindex="-1" autocomplete="off" style="position:absolute;left:-9999px;opacity:0;height:0;width:0;">
+
+      <div class="cf-turnstile" data-sitekey="0x4AAAAAAAa0gFwG5I6s4v0U" data-theme="dark" data-size="flexible" style="margin: 4px 0;"></div>
+
       <button type="submit" id="submitBtn">Join Waitlist →</button>
     </form>
 
@@ -580,7 +587,11 @@
 
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
-      const email = document.getElementById('email').value.trim();
+
+      // Honeypot check — if filled, silently reject
+      if (document.getElementById('honeypot').value) return;
+
+      const email = document.getElementById('email').value.trim().slice(0, 200);
       const role = document.getElementById('role').value;
 
       if (!email || !role) {
@@ -588,14 +599,23 @@
         return;
       }
 
+      // Basic email validation
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        alert('Please enter a valid email address.');
+        return;
+      }
+
       submitBtn.disabled = true;
       submitBtn.textContent = 'Joining...';
+
+      // Get Turnstile token
+      const cfTurnstileToken = turnstile?.getResponse();
 
       try {
         const res = await fetch('/api/waitlist', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email, role })
+          body: JSON.stringify({ email, role, cfTurnstileToken })
         });
 
         if (res.ok) {
@@ -606,7 +626,7 @@
           alert(data.error || 'Something went wrong. Try again.');
         }
       } catch {
-        // Fallback: save via Web3Forms if our server is down
+        // Fallback: Web3Forms (no Turnstile but rate-limited by them)
         try {
           await fetch('https://api.web3forms.com/submit', {
             method: 'POST',
