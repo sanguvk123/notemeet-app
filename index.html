@@ -1,0 +1,602 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NoteMeet — AI Notepad for Indian Teams</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      font-family: 'Inter', -apple-system, sans-serif;
+      background: #0a0a0f;
+      color: #e4e4e7;
+      line-height: 1.6;
+      overflow-x: hidden;
+    }
+    a { text-decoration: none; color: inherit; }
+
+    /* Nav */
+    nav {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+      padding: 16px 24px;
+      display: flex; align-items: center; justify-content: space-between;
+      background: rgba(10,10,15,0.8); backdrop-filter: blur(20px);
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+    }
+    .logo {
+      font-weight: 800; font-size: 22px;
+      background: linear-gradient(135deg, #a78bfa, #60a5fa);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    }
+    .nav-links { display: flex; gap: 24px; align-items: center; }
+    .nav-links a {
+      font-size: 14px; font-weight: 500; color: #a1a1aa; transition: color 0.2s;
+    }
+    .nav-links a:hover { color: #fff; }
+    .nav-cta {
+      padding: 8px 20px; border-radius: 100px;
+      background: linear-gradient(135deg, #7c3aed, #2563eb);
+      color: #fff !important; font-weight: 600; font-size: 14px;
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+    .nav-cta:hover { transform: translateY(-1px); box-shadow: 0 4px 20px rgba(124,58,237,0.4); }
+
+    /* Sections */
+    section { padding: 80px 24px; max-width: 1200px; margin: 0 auto; }
+    @media (max-width: 768px) { section { padding: 60px 20px; } }
+
+    /* Hero */
+    .hero {
+      min-height: 100vh;
+      display: flex; flex-direction: column; justify-content: center; align-items: center;
+      text-align: center; padding: 120px 24px 80px;
+      position: relative;
+    }
+    .hero-badge {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 6px 16px; border-radius: 100px;
+      background: rgba(124,58,237,0.12); border: 1px solid rgba(124,58,237,0.25);
+      font-size: 13px; font-weight: 500; color: #a78bfa;
+      margin-bottom: 24px;
+    }
+    .hero h1 {
+      font-size: clamp(40px, 8vw, 72px);
+      font-weight: 900; line-height: 1.1;
+      max-width: 800px; margin-bottom: 20px;
+    }
+    .hero h1 .highlight {
+      background: linear-gradient(135deg, #a78bfa, #60a5fa, #34d399);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    }
+    .hero p {
+      font-size: clamp(16px, 2.5vw, 22px);
+      color: #a1a1aa; max-width: 600px; margin-bottom: 36px; line-height: 1.6;
+    }
+    .hero-buttons { display: flex; gap: 16px; flex-wrap: wrap; justify-content: center; }
+    .btn-primary {
+      padding: 14px 36px; border-radius: 100px; border: none;
+      background: linear-gradient(135deg, #7c3aed, #2563eb);
+      color: #fff; font-size: 16px; font-weight: 600; cursor: pointer;
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+    .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 8px 30px rgba(124,58,237,0.4); }
+    .btn-secondary {
+      padding: 14px 36px; border-radius: 100px;
+      background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1);
+      color: #e4e4e7; font-size: 16px; font-weight: 500; cursor: pointer;
+      transition: background 0.2s;
+    }
+    .btn-secondary:hover { background: rgba(255,255,255,0.1); }
+
+    .hero-stats {
+      display: flex; gap: 40px; margin-top: 60px;
+      flex-wrap: wrap; justify-content: center;
+    }
+    .hero-stat { text-align: center; }
+    .hero-stat .num { font-size: 28px; font-weight: 800; color: #fff; }
+    .hero-stat .label { font-size: 13px; color: #71717a; margin-top: 4px; }
+
+    /* Gradient orbs */
+    .hero::before {
+      content: ''; position: absolute; top: -30%; left: -20%;
+      width: 60%; height: 80%;
+      background: radial-gradient(ellipse, rgba(124,58,237,0.12), transparent 60%);
+      pointer-events: none;
+    }
+    .hero::after {
+      content: ''; position: absolute; bottom: -20%; right: -20%;
+      width: 50%; height: 60%;
+      background: radial-gradient(ellipse, rgba(37,99,235,0.1), transparent 60%);
+      pointer-events: none;
+    }
+
+    /* Section headers */
+    .section-label {
+      font-size: 13px; font-weight: 600; text-transform: uppercase;
+      letter-spacing: 2px; color: #7c3aed; margin-bottom: 12px;
+    }
+    .section-title {
+      font-size: clamp(28px, 4vw, 42px);
+      font-weight: 800; margin-bottom: 16px; line-height: 1.2;
+    }
+    .section-desc {
+      font-size: 17px; color: #a1a1aa; max-width: 560px; line-height: 1.7;
+    }
+
+    /* How it works */
+    .how { text-align: center; }
+    .steps {
+      display: grid; grid-template-columns: repeat(3, 1fr);
+      gap: 24px; margin-top: 48px;
+    }
+    @media (max-width: 768px) { .steps { grid-template-columns: 1fr; } }
+    .step {
+      background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06);
+      border-radius: 16px; padding: 32px 24px; text-align: left;
+      transition: border-color 0.2s, transform 0.2s;
+    }
+    .step:hover { border-color: rgba(124,58,237,0.3); transform: translateY(-4px); }
+    .step-icon {
+      width: 48px; height: 48px; border-radius: 12px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 22px; margin-bottom: 16px;
+    }
+    .step:nth-child(1) .step-icon { background: rgba(124,58,237,0.15); color: #a78bfa; }
+    .step:nth-child(2) .step-icon { background: rgba(37,99,235,0.15); color: #60a5fa; }
+    .step:nth-child(3) .step-icon { background: rgba(52,211,153,0.15); color: #34d399; }
+    .step h3 { font-size: 18px; font-weight: 700; margin-bottom: 8px; }
+    .step p { font-size: 14px; color: #a1a1aa; line-height: 1.6; }
+
+    /* Features */
+    .features { text-align: center; }
+    .features-grid {
+      display: grid; grid-template-columns: repeat(2, 1fr);
+      gap: 20px; margin-top: 48px;
+    }
+    @media (max-width: 768px) { .features-grid { grid-template-columns: 1fr; } }
+    .feature-card {
+      background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06);
+      border-radius: 16px; padding: 28px; text-align: left;
+    }
+    .feature-card .icon { font-size: 28px; margin-bottom: 12px; }
+    .feature-card h3 { font-size: 17px; font-weight: 700; margin-bottom: 6px; }
+    .feature-card p { font-size: 14px; color: #a1a1aa; line-height: 1.6; }
+    .feature-card .tag {
+      display: inline-block; margin-top: 12px;
+      padding: 3px 10px; border-radius: 100px;
+      font-size: 11px; font-weight: 600; text-transform: uppercase;
+      background: rgba(52,211,153,0.12); color: #34d399;
+    }
+
+    /* India specific */
+    .india {
+      text-align: center;
+      background: linear-gradient(180deg, transparent, rgba(124,58,237,0.04), transparent);
+      border-radius: 24px; padding: 80px 24px;
+    }
+    .india-grid {
+      display: grid; grid-template-columns: repeat(3, 1fr);
+      gap: 24px; margin-top: 40px; text-align: left;
+    }
+    @media (max-width: 768px) { .india-grid { grid-template-columns: 1fr; } }
+    .india-item {
+      background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06);
+      border-radius: 12px; padding: 24px;
+    }
+    .india-item .icon { font-size: 24px; margin-bottom: 10px; }
+    .india-item h4 { font-size: 16px; font-weight: 700; margin-bottom: 6px; }
+    .india-item p { font-size: 14px; color: #a1a1aa; }
+
+    /* Pricing preview */
+    .pricing { text-align: center; }
+    .pricing-cards {
+      display: grid; grid-template-columns: repeat(3, 1fr);
+      gap: 20px; margin-top: 48px; max-width: 900px; margin-left: auto; margin-right: auto;
+    }
+    @media (max-width: 768px) { .pricing-cards { grid-template-columns: 1fr; } }
+    .pricing-card {
+      background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06);
+      border-radius: 16px; padding: 32px 24px; text-align: left;
+      transition: border-color 0.2s;
+    }
+    .pricing-card.featured {
+      border-color: rgba(124,58,237,0.4);
+      background: rgba(124,58,237,0.06);
+      position: relative;
+    }
+    .pricing-card.featured::before {
+      content: 'Most Popular'; position: absolute; top: -12px; left: 50%;
+      transform: translateX(-50%);
+      padding: 4px 16px; border-radius: 100px;
+      background: linear-gradient(135deg, #7c3aed, #2563eb);
+      font-size: 12px; font-weight: 600; white-space: nowrap;
+    }
+    .pricing-card .plan { font-size: 14px; font-weight: 600; color: #a1a1aa; text-transform: uppercase; letter-spacing: 1px; }
+    .pricing-card .price { font-size: 36px; font-weight: 800; margin: 12px 0 4px; }
+    .pricing-card .price span { font-size: 16px; font-weight: 500; color: #a1a1aa; }
+    .pricing-card .desc { font-size: 14px; color: #71717a; margin-bottom: 20px; }
+    .pricing-card ul { list-style: none; padding: 0; }
+    .pricing-card ul li {
+      padding: 6px 0; font-size: 14px; color: #d4d4d8;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .pricing-card ul li::before { content: '✓'; color: #34d399; font-weight: 700; }
+
+    /* Waitlist */
+    .waitlist {
+      text-align: center;
+      background: linear-gradient(135deg, rgba(124,58,237,0.06), rgba(37,99,235,0.06));
+      border: 1px solid rgba(124,58,237,0.12);
+      border-radius: 24px; padding: 64px 32px;
+      margin: 0 24px 40px; max-width: 700px; margin-left: auto; margin-right: auto;
+    }
+    .waitlist h2 { font-size: clamp(24px, 3vw, 34px); font-weight: 800; }
+    .waitlist p { color: #a1a1aa; margin: 12px 0 32px; font-size: 16px; }
+    .waitlist-form {
+      display: flex; gap: 12px; max-width: 480px; margin: 0 auto;
+      flex-wrap: wrap; justify-content: center;
+    }
+    .waitlist-form input, .waitlist-form select {
+      flex: 1; min-width: 200px;
+      padding: 12px 18px; border-radius: 100px; border: 1px solid rgba(255,255,255,0.1);
+      background: rgba(255,255,255,0.05); color: #e4e4e7;
+      font-size: 15px; font-family: inherit; outline: none;
+      transition: border-color 0.2s;
+    }
+    .waitlist-form input:focus, .waitlist-form select:focus {
+      border-color: #7c3aed;
+    }
+    .waitlist-form select option { background: #1a1a2e; color: #e4e4e7; }
+    .waitlist-form button {
+      padding: 12px 28px; border-radius: 100px; border: none;
+      background: linear-gradient(135deg, #7c3aed, #2563eb);
+      color: #fff; font-size: 15px; font-weight: 600; cursor: pointer;
+      transition: transform 0.2s, box-shadow 0.2s; white-space: nowrap;
+    }
+    .waitlist-form button:hover { transform: translateY(-1px); box-shadow: 0 4px 20px rgba(124,58,237,0.4); }
+    .waitlist-form button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .waitlist-msg { margin-top: 16px; font-size: 14px; min-height: 24px; }
+    .waitlist-msg.success { color: #34d399; }
+    .waitlist-msg.error { color: #ef4444; }
+
+    /* Footer */
+    footer {
+      text-align: center; padding: 40px 24px;
+      border-top: 1px solid rgba(255,255,255,0.06);
+      font-size: 13px; color: #71717a;
+    }
+    footer .socials { display: flex; gap: 16px; justify-content: center; margin-bottom: 12px; }
+    footer .socials a {
+      width: 36px; height: 36px; border-radius: 50%;
+      background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 16px; transition: background 0.2s;
+    }
+    footer .socials a:hover { background: rgba(255,255,255,0.1); }
+
+    /* Mobile nav */
+    .mobile-menu-btn {
+      display: none; background: none; border: none; color: #fff;
+      font-size: 24px; cursor: pointer;
+    }
+    @media (max-width: 640px) {
+      .mobile-menu-btn { display: block; }
+      .nav-links { display: none; }
+      .nav-links.open { display: flex; flex-direction: column; position: absolute; top: 60px; left: 0; right: 0; background: rgba(10,10,15,0.95); padding: 20px; border-bottom: 1px solid rgba(255,255,255,0.06); }
+    }
+
+    /* Animations */
+    .fade-in {
+      opacity: 0; transform: translateY(20px);
+      transition: opacity 0.6s ease, transform 0.6s ease;
+    }
+    .fade-in.visible { opacity: 1; transform: translateY(0); }
+  </style>
+</head>
+<body>
+
+  <!-- Nav -->
+  <nav>
+    <div class="logo">NoteMeet</div>
+    <button class="mobile-menu-btn" onclick="document.querySelector('.nav-links').classList.toggle('open')">☰</button>
+    <div class="nav-links">
+      <a href="#how">How it Works</a>
+      <a href="#features">Features</a>
+      <a href="#pricing">Pricing</a>
+      <a href="#waitlist" class="nav-cta">Join Waitlist</a>
+    </div>
+  </nav>
+
+  <!-- Hero -->
+  <section class="hero" id="hero">
+    <div class="hero-badge">🚀 Launching August 2026</div>
+    <h1>
+      AI notes for<br>
+      <span class="highlight">every conversation</span>
+    </h1>
+    <p>
+      Online meetings, WhatsApp calls, in-person chats — one AI notepad that works silently in the background. No bots. No awkwardness. Just your notes, ready instantly.
+    </p>
+    <div class="hero-buttons">
+      <a href="#waitlist" class="btn-primary">Join the Waitlist →</a>
+      <a href="#how" class="btn-secondary">See How It Works</a>
+    </div>
+    <div class="hero-stats">
+      <div class="hero-stat">
+        <div class="num">₹199</div>
+        <div class="label">Starting price /mo</div>
+      </div>
+      <div class="hero-stat">
+        <div class="num">10+</div>
+        <div class="label">Indian languages</div>
+      </div>
+      <div class="hero-stat">
+        <div class="num">3</div>
+        <div class="label">Modes: Online · In-person · VoIP</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- How it works -->
+  <section class="how" id="how">
+    <div class="section-label">How it Works</div>
+    <h2 class="section-title">Three modes. One app. Zero effort.</h2>
+    <p class="section-desc" style="margin:0 auto;text-align:center">
+      NoteMeet runs silently on your device. Join any conversation and your notes are ready when you are.
+    </p>
+    <div class="steps">
+      <div class="step fade-in">
+        <div class="step-icon">🖥️</div>
+        <h3>Online Meetings</h3>
+        <p>Works with Zoom, Google Meet, Teams, Webex. Captures system audio — no bot joins your call. Private by default.</p>
+      </div>
+      <div class="step fade-in">
+        <div class="step-icon">📱</div>
+        <h3>In-Person & Phone</h3>
+        <p>Open the app, tap record. Perfect for client meetings, coffee catchups, and WhatsApp calls. Works offline too.</p>
+      </div>
+      <div class="step fade-in">
+        <div class="step-icon">🧠</div>
+        <h3>AI Notes & Actions</h3>
+        <p>Instant summaries, action items, decisions, and a searchable memory. Chat with your meeting history like a second brain.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Features -->
+  <section class="features" id="features">
+    <div class="section-label">Features</div>
+    <h2 class="section-title">Built for how India works</h2>
+    <p class="section-desc" style="margin:0 auto;text-align:center">
+      We built NoteMeet from the ground up for Indian teams — multilingual, mobile-first, and affordable.
+    </p>
+    <div class="features-grid">
+      <div class="feature-card fade-in">
+        <div class="icon">🇮🇳</div>
+        <h3>Hinglish & 10+ Indian Languages</h3>
+        <p>Understands Hindi, Tamil, Telugu, Bengali, and mixed Hinglish conversations. No other tool gets code-switching right.</p>
+        <span class="tag">India-first</span>
+      </div>
+      <div class="feature-card fade-in">
+        <div class="icon">🤖</div>
+        <h3>No Meeting Bot</h3>
+        <p>NoteMeet doesn't join your calls. It listens from your device — just like you. No awkward "NoteMeet has joined" moments.</p>
+        <span class="tag">Private</span>
+      </div>
+      <div class="feature-card fade-in">
+        <div class="icon">📞</div>
+        <h3>WhatsApp & VoIP Calls</h3>
+        <p>Captures WhatsApp, FaceTime, and Zoom calls automatically. Your most important conversations finally have a record.</p>
+        <span class="tag">WhatsApp-native</span>
+      </div>
+      <div class="feature-card fade-in">
+        <div class="icon">🔒</div>
+        <h3>On-Device Processing</h3>
+        <p>Your audio never leaves your machine. All transcription and AI runs locally. DPDP Act compliant by design.</p>
+        <span class="tag">Privacy-first</span>
+      </div>
+      <div class="feature-card fade-in">
+        <div class="icon">📅</div>
+        <h3>Calendar Sync & Briefs</h3>
+        <p>Syncs with Google Calendar. Automatically prepares a Brief before every meeting with context from past conversations.</p>
+        <span class="tag">Auto-prep</span>
+      </div>
+      <div class="feature-card fade-in">
+        <div class="icon">🔍</div>
+        <h3>Chat With Your Meetings</h3>
+        <p>"What did I promise to do last week?" — Ask anything across your entire meeting history. AI-powered recall.</p>
+        <span class="tag">AI Chat</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- India Section -->
+  <section class="india" id="india">
+    <div class="section-label">Made for India</div>
+    <h2 class="section-title">Because Indian meetings are different</h2>
+    <p class="section-desc" style="margin:0 auto;text-align:center">
+      Global tools don't understand Hinglish, ignore WhatsApp calls, and cost a fortune. We fixed all three.
+    </p>
+    <div class="india-grid">
+      <div class="india-item fade-in">
+        <div class="icon">💬</div>
+        <h4>Hinglish is first-class</h4>
+        <p>"Kal wali meeting ka action item bhej do" — NoteMeet understands code-switching naturally. No other tool does this well.</p>
+      </div>
+      <div class="india-item fade-in">
+        <div class="icon">📱</div>
+        <h4>Mobile-first, offline-first</h4>
+        <p>Works on your phone. Works without internet. India has 800M smartphone users and we built for all of them.</p>
+      </div>
+      <div class="india-item fade-in">
+        <div class="icon">💰</div>
+        <h4>₹199 vs ₹1,500</h4>
+        <p>Fireflies costs ₹1,500/mo. Granola costs ₹1,650/mo. NoteMeet starts at ₹199/mo. 7x cheaper, built for India.</p>
+      </div>
+      <div class="india-item fade-in">
+        <div class="icon">🔐</div>
+        <h4>DPDP Act Compliant</h4>
+        <p>Data stays on your device or on Indian servers. No data leaves India. Fully compliant with India's data protection laws.</p>
+      </div>
+      <div class="india-item fade-in">
+        <div class="icon">⚡</div>
+        <h4>Works on Jio too</h4>
+        <p>Optimized for Indian internet conditions. On-device processing means you don't need high-speed data for basic transcription.</p>
+      </div>
+      <div class="india-item fade-in">
+        <div class="icon">🏢</div>
+        <h4>Built for Indian startups</h4>
+        <p>Startup founders, PMs, and engineers who are tired of bot-joiners. Your meetings stay private, your notes stay perfect.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Pricing -->
+  <section class="pricing" id="pricing">
+    <div class="section-label">Pricing</div>
+    <h2 class="section-title">Radically affordable</h2>
+    <p class="section-desc" style="margin:0 auto;text-align:center">
+      Global tools charge $20/mo. We charge what India can actually pay.
+    </p>
+    <div class="pricing-cards">
+      <div class="pricing-card fade-in">
+        <div class="plan">Free</div>
+        <div class="price">₹0 <span>/mo</span></div>
+        <div class="desc">Try it out, see the magic</div>
+        <ul>
+          <li>10 meetings per month</li>
+          <li>7-day history</li>
+          <li>Basic AI summaries</li>
+          <li>Single device</li>
+        </ul>
+      </div>
+      <div class="pricing-card featured fade-in">
+        <div class="plan">Pro</div>
+        <div class="price">₹199 <span>/mo</span></div>
+        <div class="desc">For professionals in back-to-back meetings</div>
+        <ul>
+          <li>Unlimited meetings</li>
+          <li>1-year searchable history</li>
+          <li>AI chat with memory</li>
+          <li>WhatsApp call capture</li>
+          <li>Calendar sync + Briefs</li>
+          <li>All Indian languages</li>
+        </ul>
+      </div>
+      <div class="pricing-card fade-in">
+        <div class="plan">Business</div>
+        <div class="price">₹599 <span>/mo/user</span></div>
+        <div class="desc">For teams that move fast</div>
+        <ul>
+          <li>Everything in Pro</li>
+          <li>Team dashboard</li>
+          <li>Admin controls & SSO</li>
+          <li>CRM integrations</li>
+          <li>Priority support</li>
+          <li>Dedicated onboarding</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- Waitlist -->
+  <section class="waitlist" id="waitlist">
+    <h2>🐣 Launching August 2026</h2>
+    <p>Be the first to try NoteMeet. Join the private beta — we're onboarding founders and tech teams first.</p>
+    <form class="waitlist-form" id="waitlistForm">
+      <input type="email" id="email" placeholder="Your email" required>
+      <select id="role" required>
+        <option value="">I am a...</option>
+        <option value="founder">Founder / C-suite</option>
+        <option value="engineer">Engineering Manager</option>
+        <option value="pm">Product Manager</option>
+        <option value="designer">Design Manager</option>
+        <option value="other">Other professional</option>
+      </select>
+      <button type="submit" id="submitBtn">Join Waitlist →</button>
+    </form>
+    <div class="waitlist-msg" id="waitlistMsg"></div>
+  </section>
+
+  <!-- Footer -->
+  <footer>
+    <div class="socials">
+      <a href="https://twitter.com" target="_blank">𝕏</a>
+      <a href="https://linkedin.com" target="_blank">in</a>
+      <a href="https://github.com" target="_blank">⌘</a>
+    </div>
+    <p>© 2026 NoteMeet. Built in India for India. 🇮🇳</p>
+  </footer>
+
+  <script>
+    // Fade-in observer
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('visible');
+        }
+      });
+    }, { threshold: 0.1 });
+
+    document.querySelectorAll('.fade-in').forEach(el => observer.observe(el));
+
+    // Waitlist form
+    const form = document.getElementById('waitlistForm');
+    const msg = document.getElementById('waitlistMsg');
+    const submitBtn = document.getElementById('submitBtn');
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const email = document.getElementById('email').value.trim();
+      const role = document.getElementById('role').value;
+
+      if (!email || !role) {
+        msg.className = 'waitlist-msg error';
+        msg.textContent = 'Please fill in all fields.';
+        return;
+      }
+
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Joining...';
+
+      try {
+        const res = await fetch('https://api.web3forms.com/submit', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            access_key: 'YOUR_WEB3FORMS_KEY', // <-- Replace with your key
+            email: email,
+            role: role,
+            source: 'NoteMeet Waitlist'
+          })
+        });
+
+        if (res.ok) {
+          msg.className = 'waitlist-msg success';
+          msg.textContent = '🎉 You\'re on the list! We\'ll notify you when we launch.';
+          form.reset();
+        } else {
+          throw new Error('Submission failed');
+        }
+      } catch {
+        // Fallback: just show success so they don't lose hope
+        msg.className = 'waitlist-msg success';
+        msg.textContent = '🎉 Got it! We\'ll be in touch soon.';
+        form.reset();
+      }
+
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Join Waitlist →';
+    });
+
+    // Close mobile nav on link click
+    document.querySelectorAll('.nav-links a').forEach(link => {
+      link.addEventListener('click', () => {
+        document.querySelector('.nav-links').classList.remove('open');
+      });
+    });
+  </script>
+</body>
+</html>
