@@ -54,7 +54,7 @@ export default function App() {
       setIsRecording(true);
       setTranscript('');
       setElapsed(0);
-      await invoke('start_recording', { type: meetingType });
+      await invoke('start_recording', { meetingType });
     } catch (e) {
       console.error(e);
       setStatus('idle');
@@ -88,7 +88,12 @@ export default function App() {
     <div className="app">
       <header className="header">
         <div className="logo">NoteMeet</div>
-        <span className="badge">v0.1 beta</span>
+        <div className="header-actions">
+          <button className="mini-toggle-btn" onClick={() => invoke('create_mini_window')} title="Mini Recorder">
+            ⊞ Mini
+          </button>
+          <span className="badge">v0.1 beta</span>
+        </div>
       </header>
 
       <main className="main">
