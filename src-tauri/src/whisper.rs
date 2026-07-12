@@ -3,15 +3,46 @@ use std::process::Command;
 
 macro_rules! log { ($($t:tt)*) => { eprintln!("[NoteMeet {}] {}", Local::now().format("%H:%M:%S%.3f"), format!($($t)*)) } }
 
-pub fn transcribe(audio_data: &[i16], sample_rate: u32) -> Result<String, String> {
-    let total_samples = audio_data.len();
+/// Check if audio data is empty or all silence (zeros).
+pub fn is_empty_or_silence(audio_data: &[i16], sample_rate: u32) -> bool {
+    if audio_data.is_empty() {
+        return true;
+    }
     let expected_silence = sample_rate as usize * 2;
+    audio_data.len() <= expected_silence && audio_data.iter().all(|&s| s == 0)
+}
 
-    if audio_data.is_empty() || (total_samples <= expected_silence && audio_data.iter().all(|&s| s == 0)) {
-        log!("Audio is empty or all silence ({} samples)", total_samples);
+/// Parse whisper-cli stdout into a single transcript string.
+/// Filters out timestamps, [Music], [Silence] markers.
+pub fn parse_whisper_stdout(stdout: &str) -> String {
+    let lines: Vec<&str> = stdout.lines().filter(|l| l.contains("-->")).collect();
+
+    if lines.is_empty() {
+        return String::new();
+    }
+
+    lines
+        .iter()
+        .filter_map(|l| {
+            let idx = l.find(']').map(|i| i + 1)?;
+            let segment = l[idx..].trim();
+            if segment.is_empty() || segment == "[Music]" || segment == "[Silence]" {
+                None
+            } else {
+                Some(segment)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+pub fn transcribe(audio_data: &[i16], sample_rate: u32) -> Result<String, String> {
+    if is_empty_or_silence(audio_data, sample_rate) {
+        log!("Audio is empty or all silence ({} samples)", audio_data.len());
         return Ok("[No audio detected]".to_string());
     }
 
+    let total_samples = audio_data.len();
     log!("Transcribing {} samples @ {} Hz ({:.1}s)", total_samples, sample_rate, total_samples as f64 / sample_rate as f64);
 
     let wav_path = "/tmp/notemeet_recording.wav";
@@ -60,38 +91,92 @@ pub fn transcribe(audio_data: &[i16], sample_rate: u32) -> Result<String, String
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let line_count = stdout.lines().count();
-    log!("whisper-cli stdout: {} lines", line_count);
+    log!("whisper-cli stdout: {} lines", stdout.lines().count());
 
-    let lines: Vec<&str> = stdout
-        .lines()
-        .filter(|l| l.contains("-->"))
-        .collect();
-
-    if lines.is_empty() {
-        log!("No speech detected in whisper output");
-        return Ok("[No speech detected]".to_string());
-    }
-
-    let text: String = lines
-        .iter()
-        .filter_map(|l| {
-            let idx = l.find(']').map(|i| i + 1)?;
-            let segment = l[idx..].trim();
-            if segment.is_empty() || segment == "[Music]" || segment == "[Silence]" {
-                None
-            } else {
-                Some(segment)
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ");
+    let text = parse_whisper_stdout(&stdout);
 
     if text.is_empty() {
-        log!("All segments filtered out (music/silence only)");
+        log!("No speech detected in whisper output");
         return Ok("[No speech detected]".to_string());
     }
 
     log!("Transcribed {} chars: \"{:.100}...\"", text.len(), text);
     Ok(text)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_empty_audio_is_silence() {
+        assert!(is_empty_or_silence(&[], 44100));
+    }
+
+    #[test]
+    fn test_all_zeros_is_silence() {
+        let silence = vec![0i16; 44100]; // 1 second of zeros
+        assert!(is_empty_or_silence(&silence, 44100));
+    }
+
+    #[test]
+    fn test_short_zeros_is_silence() {
+        let silence = vec![0i16; 100];
+        assert!(is_empty_or_silence(&silence, 44100));
+    }
+
+    #[test]
+    fn test_real_audio_not_silence() {
+        let audio = vec![100i16; 44100];
+        assert!(!is_empty_or_silence(&audio, 44100));
+    }
+
+    #[test]
+    fn test_long_zeros_not_silence() {
+        let silence = vec![0i16; 44100 * 5]; // 5 seconds of zeros — longer than 2s threshold
+        assert!(!is_empty_or_silence(&silence, 44100));
+    }
+
+    #[test]
+    fn test_parse_normal_output() {
+        let stdout = "[00:00:00.000 --> 00:00:02.000]  Hello world.\n[00:00:02.000 --> 00:00:04.000]  This is a test.\n";
+        let result = parse_whisper_stdout(stdout);
+        assert_eq!(result, "Hello world. This is a test.");
+    }
+
+    #[test]
+    fn test_parse_empty_output() {
+        assert_eq!(parse_whisper_stdout(""), "");
+    }
+
+    #[test]
+    fn test_parse_only_timestamps_no_text() {
+        let stdout = "[00:00:00.000 --> 00:00:02.000]\n";
+        assert_eq!(parse_whisper_stdout(stdout), "");
+    }
+
+    #[test]
+    fn test_parse_filters_music_silence() {
+        let stdout = "[00:00:00.000 --> 00:00:02.000]  [Music]\n[00:00:02.000 --> 00:00:04.000]  [Silence]\n[00:00:04.000 --> 00:00:06.000]  Actual speech.\n";
+        assert_eq!(parse_whisper_stdout(stdout), "Actual speech.");
+    }
+
+    #[test]
+    fn test_parse_no_timestamp_lines() {
+        let stdout = "whisper-cli v1.0\nModel: tiny.en\n";
+        assert_eq!(parse_whisper_stdout(stdout), "");
+    }
+
+    #[test]
+    fn test_parse_multiple_segments() {
+        let stdout = "[00:00:00.000 --> 00:00:03.000]  First segment.\n[00:00:03.000 --> 00:00:06.000]  Second one here.\n[00:00:06.000 --> 00:00:09.000]  And a third.\n";
+        let result = parse_whisper_stdout(stdout);
+        assert_eq!(result, "First segment. Second one here. And a third.");
+    }
+
+    #[test]
+    fn test_parse_trims_whitespace() {
+        let stdout = "[00:00:00.000 --> 00:00:02.000]     Spaced out text.   \n";
+        assert_eq!(parse_whisper_stdout(stdout), "Spaced out text.");
+    }
 }

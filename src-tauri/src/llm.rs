@@ -252,3 +252,80 @@ Answer the user's questions based on this meeting note. Be concise and helpful. 
 
     Ok(content.to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_chat_message_serde_roundtrip() {
+        let msg = ChatMessage {
+            role: "user".to_string(),
+            content: "What was discussed?".to_string(),
+        };
+        let json = serde_json::to_string(&msg).expect("Failed to serialize");
+        let deserialized: ChatMessage = serde_json::from_str(&json).expect("Failed to deserialize");
+        assert_eq!(deserialized.role, "user");
+        assert_eq!(deserialized.content, "What was discussed?");
+    }
+
+    #[test]
+    fn test_chat_message_array_serde() {
+        let messages = vec![
+            ChatMessage { role: "user".into(), content: "Hello".into() },
+            ChatMessage { role: "assistant".into(), content: "Hi there".into() },
+        ];
+        let json = serde_json::to_string(&messages).expect("Failed to serialize");
+        assert!(json.contains("\"user\""));
+        assert!(json.contains("\"assistant\""));
+        assert!(json.contains("Hello"));
+        assert!(json.contains("Hi there"));
+    }
+
+    #[test]
+    fn test_generate_notes_returns_mock_without_key() {
+        std::env::remove_var("OPENROUTER_API_KEY");
+        std::env::remove_var("ANTHROPIC_API_KEY");
+        std::env::set_var("HOME", "/tmp/notemeet_test_no_key");
+
+        let result = generate_notes("Test Meeting", "Some transcript text", "meeting");
+        assert!(result.is_ok());
+        let note = result.unwrap();
+        assert_eq!(note.title, "Test Meeting");
+        assert!(!note.short_summary.is_empty());
+        assert!(!note.full_summary.is_empty());
+        assert!(!note.action_items.is_empty());
+        assert_eq!(note.meeting_type, "meeting");
+        assert_eq!(note.transcript, "Some transcript text");
+        assert!(!note.id.is_empty());
+    }
+
+    #[test]
+    fn test_chat_about_note_returns_error_without_key() {
+        std::env::remove_var("OPENROUTER_API_KEY");
+        std::env::remove_var("ANTHROPIC_API_KEY");
+        std::env::set_var("HOME", "/tmp/notemeet_test_no_key");
+
+        let result = chat_about_note("{}", "test question", &[]);
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert!(response.contains("API key"));
+    }
+
+    #[test]
+    fn test_load_api_key_from_env() {
+        std::env::set_var("OPENROUTER_API_KEY", "sk-or-v1-test123");
+        let key = load_api_key();
+        assert_eq!(key, "sk-or-v1-test123");
+        std::env::remove_var("OPENROUTER_API_KEY");
+    }
+
+    #[test]
+    fn test_load_api_key_fallback_when_no_env() {
+        std::env::remove_var("OPENROUTER_API_KEY");
+        std::env::remove_var("ANTHROPIC_API_KEY");
+        std::env::set_var("HOME", "/tmp/notemeet_test_no_key");
+        let key = load_api_key();
+        assert!(!key.is_empty());
+    }
+}
