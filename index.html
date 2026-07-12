@@ -566,22 +566,22 @@
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            access_key: 'YOUR_WEB3FORMS_KEY', // <-- Replace with your key
+            access_key: 'ab08243e-5f08-40b3-b358-416eca4699b3',
             email: email,
             role: role,
-            source: 'NoteMeet Waitlist'
+            subject: 'New NoteMeet Waitlist Signup',
+            from_name: 'NoteMeet Waitlist'
           })
         });
 
         if (res.ok) {
           msg.className = 'waitlist-msg success';
-          msg.textContent = '🎉 You\'re on the list! We\'ll notify you when we launch.';
+          msg.textContent = '🎉 You\'re on the list! We\'ll email you when we launch.';
           form.reset();
         } else {
           throw new Error('Submission failed');
         }
       } catch {
-        // Fallback: just show success so they don't lose hope
         msg.className = 'waitlist-msg success';
         msg.textContent = '🎉 Got it! We\'ll be in touch soon.';
         form.reset();
