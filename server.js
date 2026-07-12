@@ -79,6 +79,15 @@ app.get('/api/waitlist', (req, res) => {
   res.json(getWaitlist());
 });
 
+app.get('/api/waitlist/count', (req, res) => {
+  const list = getWaitlist();
+  const recent = list.slice(-5).reverse().map(e => ({
+    role: e.role,
+    time: e.timestamp
+  }));
+  res.json({ count: list.length, recent });
+});
+
 app.listen(PORT, () => {
   console.log(`NoteMeet running on http://localhost:${PORT}`);
   console.log(`Waitlist API: http://localhost:${PORT}/api/waitlist`);

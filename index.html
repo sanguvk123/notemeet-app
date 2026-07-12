@@ -259,6 +259,23 @@
     .waitlist-form button:disabled { opacity: 0.5; cursor: not-allowed; }
     .waitlist-success { margin-top: 16px; font-size: 16px; min-height: 24px; color: #34d399; font-weight: 600; }
 
+    /* Live counter */
+    .live-counter {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 6px 16px; border-radius: 100px;
+      background: rgba(52,211,153,0.1); border: 1px solid rgba(52,211,153,0.2);
+      font-size: 13px; color: #34d399; margin-top: 40px;
+    }
+    .live-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: #34d399; animation: pulse 2s infinite;
+    }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+    .recent-join {
+      font-size: 12px; color: #71717a; margin-top: 6px;
+      transition: opacity 0.3s;
+    }
+
     /* Footer */
     footer {
       text-align: center; padding: 40px 24px;
@@ -520,6 +537,12 @@
       </select>
       <button type="submit" id="submitBtn">Join Waitlist →</button>
     </form>
+
+    <div class="live-counter" id="liveCounter">
+      <span class="live-dot"></span>
+      <span id="signupCount">--</span> people have joined
+    </div>
+    <div class="recent-join" id="recentJoin"></div>
   </section>
 
   <!-- Footer -->
@@ -601,7 +624,28 @@
 
       submitBtn.disabled = false;
       submitBtn.textContent = 'Join Waitlist →';
+      setTimeout(updateCounter, 2000);
     });
+
+    // Live counter — poll server every 15s
+    async function updateCounter() {
+      try {
+        const res = await fetch('/api/waitlist/count');
+        if (!res.ok) return;
+        const data = await res.json();
+        document.getElementById('signupCount').textContent = data.count;
+
+        if (data.recent && data.recent.length > 0) {
+          const last = data.recent[0];
+          const roleLabels = { founder: 'Founder', engineer: 'Eng Manager', pm: 'PM', designer: 'Design Lead', other: 'Pro' };
+          const time = new Date(last.time).toLocaleString('en-IN', { hour: 'numeric', minute: 'numeric' });
+          document.getElementById('recentJoin').textContent =
+            `Last: ${roleLabels[last.role] || last.role} joined at ${time}`;
+        }
+      } catch {}
+    }
+    updateCounter();
+    setInterval(updateCounter, 15000);
 
     // Close mobile nav on link click
     document.querySelectorAll('.nav-links a').forEach(link => {
