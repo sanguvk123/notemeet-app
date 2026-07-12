@@ -9,40 +9,67 @@ AI meeting notes without a bot. Works for online meetings, WhatsApp calls, and i
 - On-device processing (DPDP compliant)
 - ₹199/mo (vs ₹1,500 for Fireflies/Granola)
 
-## Quick Start
+## macOS Desktop App (v1 beta)
+
+Built with Tauri + React + Whisper + Claude.
+
+### Quick Start
 
 ```bash
-# Install dependencies
+# Install prerequisites
+brew install rust
 npm install
 
-# Set up email (Gmail App Password)
-npm run setup
+# Set up Whisper and dependencies
+chmod +x setup.sh
+./setup.sh
 
-# Start the server
-npm start
+# Run in development
+ANTHROPIC_API_KEY=sk-ant-your-key npm run tauri dev
+
+# Build for production
+npm run tauri build
 ```
 
-## Email Setup
+### Architecture
 
-To receive waitlist signups via email:
-
-1. Go to https://myaccount.google.com/apppasswords
-2. Select "Mail" + your device → generate a 16-char password
-3. Run `npm run setup` and enter the password
-
-Alternatively, create a `.env` file:
 ```
-EMAIL_TO=sangkalbe@gmail.com
-EMAIL_FROM=your-email@gmail.com
-EMAIL_PASS=your-16-char-app-password
+notemeet-app/
+├── src/                    # React frontend
+│   ├── App.jsx            # Main UI
+│   ├── MiniRecorder.jsx   # Floating mini recorder
+│   ├── main.jsx           # Entry
+│   └── styles.css         # Styles
+├── src-tauri/              # Rust backend
+│   ├── src/
+│   │   ├── main.rs        # Tauri app + commands
+│   │   ├── audio.rs       # CoreAudio capture
+│   │   ├── whisper.rs     # Whisper transcription
+│   │   └── llm.rs         # Claude note generation
+│   ├── Cargo.toml
+│   └── tauri.conf.json
+├── package.json
+├── vite.config.js
+└── setup.sh
 ```
 
-## Deploy
+### v1 Features
+- Mic recording
+- Whisper on-device transcription (tiny.en model, ~75MB)
+- Claude-generated meeting notes with action items
+- Clean macOS-native UI
+- Floating mini recorder window
 
-- **Static site**: Push to GitHub and enable Pages (branch: `main`, folder: `/`)
-- **API server**: Deploy `server.js` to Render/Railway (free tier)
+## Roadmap
+- System audio capture (no mic needed)
+- ScreenCaptureKit integration
+- Calendar sync
+- AI chat over history
+- Android + iOS apps
 
-## Built With
-- HTML/CSS/JS
-- Express + Nodemailer
-- GitHub Pages
+## Tech
+- **Desktop:** Tauri (Rust + React)
+- **Audio:** CoreAudio (macOS)
+- **Transcription:** Whisper (on-device)
+- **Notes:** Claude API
+- **Pricing:** ₹199/mo (v1 is free during beta)
