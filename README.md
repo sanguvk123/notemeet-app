@@ -1,19 +1,10 @@
 # NoteMeet — AI Notepad for Indian Teams
 
-AI meeting notes without a bot. Works for online meetings, WhatsApp calls, and in-person conversations. Built for India.
-
-## Features
-- No bot joins your meetings (listens from your device)
-- Hinglish + 10 Indian languages
-- WhatsApp & VoIP call capture
-- On-device processing (DPDP compliant)
-- ₹199/mo (vs ₹1,500 for Fireflies/Granola)
-
 ## macOS Desktop App (v1 beta)
 
 Built with Tauri + React + Whisper + Claude.
 
-### Quick Start
+## Quick Start
 
 ```bash
 # Install prerequisites
@@ -31,13 +22,12 @@ ANTHROPIC_API_KEY=sk-ant-your-key npm run tauri dev
 npm run tauri build
 ```
 
-### Architecture
+## Architecture
 
 ```
 notemeet-app/
 ├── src/                    # React frontend
 │   ├── App.jsx            # Main UI
-│   ├── MiniRecorder.jsx   # Floating mini recorder
 │   ├── main.jsx           # Entry
 │   └── styles.css         # Styles
 ├── src-tauri/              # Rust backend
@@ -53,12 +43,11 @@ notemeet-app/
 └── setup.sh
 ```
 
-### v1 Features
+## v1 Features
 - Mic recording
 - Whisper on-device transcription (tiny.en model, ~75MB)
 - Claude-generated meeting notes with action items
 - Clean macOS-native UI
-- Floating mini recorder window
 
 ## Roadmap
 - System audio capture (no mic needed)

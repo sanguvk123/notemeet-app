@@ -1,6 +1,4 @@
 node_modules/
-.env
-waitlist.json
 dist/
 target/
 src-tauri/whisper/whisper.cpp/
