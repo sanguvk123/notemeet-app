@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/tauri';
 import { listen } from '@tauri-apps/api/event';
-import { appWindow } from '@tauri-apps/api/window';
 
 export default function MiniRecorder() {
   const [status, setStatus] = useState('idle');
@@ -16,12 +15,14 @@ export default function MiniRecorder() {
     const unsub2 = listen('note-ready', () => {
       setStatus('idle');
       setElapsed(0);
-      clearInterval(timerRef.current);
+    });
+    const unsub3 = listen('recording-stopped', () => {
+      setStatus('processing');
     });
     return () => {
       unsub1.then((f) => f());
       unsub2.then((f) => f());
-      clearInterval(timerRef.current);
+      unsub3.then((f) => f());
     };
   }, []);
 
@@ -34,38 +35,37 @@ export default function MiniRecorder() {
     return () => clearInterval(timerRef.current);
   }, [status]);
 
-  const startRecording = async () => {
-    try {
-      setStatus('recording');
-      setElapsed(0);
-      await invoke('start_recording', { meetingType: 'meeting' });
-    } catch (e) {
-      console.error(e);
-      setStatus('idle');
-    }
-  };
-
-  const stopRecording = async () => {
-    try {
-      setStatus('processing');
-      await invoke('stop_recording', { title: 'Quick Note' });
-    } catch (e) {
-      console.error(e);
-    }
-    setStatus('idle');
-    setElapsed(0);
-  };
-
-  const openMainWindow = async () => {
-    try {
-      const { WebviewWindow } = await import('@tauri-apps/api/window');
-      const main = WebviewWindow.getByLabel('main');
-      if (main) {
-        await main.show();
-        await main.setFocus();
+  const toggle = async () => {
+    if (status === 'idle') {
+      try {
+        setStatus('recording');
+        setElapsed(0);
+        await invoke('start_recording', { meetingType: 'meeting' });
+      } catch (e) {
+        console.error(e);
+        setStatus('idle');
       }
-    } catch (e) {
-      console.error(e);
+    } else if (status === 'recording') {
+      try {
+        setStatus('processing');
+        const result = await invoke('stop_recording', { title: 'Quick Note' });
+        setStatus('idle');
+        setElapsed(0);
+        if (result) {
+          try {
+            const { WebviewWindow } = await import('@tauri-apps/api/window');
+            const main = WebviewWindow.getByLabel('main');
+            if (main) {
+              await main.show();
+              await main.setFocus();
+              await main.emit('note-ready', result);
+            }
+          } catch (_) {}
+        }
+      } catch (e) {
+        console.error(e);
+        setStatus('idle');
+      }
     }
   };
 
@@ -75,40 +75,38 @@ export default function MiniRecorder() {
     return `${m}:${sec.toString().padStart(2, '0')}`;
   };
 
+  const isRecording = status === 'recording';
+  const isProcessing = status === 'processing';
+
   return (
-    <div className="mini-recorder" data-status={status}>
-      <div className="mini-drag-region" data-tauri-drag-region />
-
-      {status === 'idle' && (
-        <button className="mini-record-btn" onClick={startRecording}>
-          <span className="mini-record-dot" />
-          Record
-        </button>
-      )}
-
-      {status === 'recording' && (
-        <div className="mini-recording-state">
-          <div className="mini-indicator">
-            <span className="mini-pulse-dot" />
-            <span className="mini-label">RECORDING</span>
-            <span className="mini-time">{formatTime(elapsed)}</span>
-          </div>
-          <button className="mini-stop-btn" onClick={stopRecording}>
-            ■
-          </button>
-        </div>
-      )}
-
-      {status === 'processing' && (
-        <div className="mini-processing">
+    <div className="mini-window">
+      <div className="mini-drag-area" data-tauri-drag-region />
+      <button
+        className={`mini-toggle ${isRecording ? 'recording' : ''} ${isProcessing ? 'processing' : ''}`}
+        onClick={toggle}
+        disabled={isProcessing}
+        title={isRecording ? 'Stop & Generate' : 'Start Recording'}
+      >
+        {isProcessing ? (
           <span className="mini-spinner" />
-          <span>Processing...</span>
-        </div>
-      )}
-
-      <button className="mini-open-btn" onClick={openMainWindow} title="Open NoteMeet">
-        ⌗
+        ) : isRecording ? (
+          <span className="mini-stop-icon" />
+        ) : (
+          <span className="mini-play-icon" />
+        )}
       </button>
+      <div className="mini-status">
+        {isProcessing ? (
+          <span className="mini-status-text">Processing...</span>
+        ) : (
+          <>
+            <span className={`mini-status-dot ${isRecording ? 'live' : ''}`} />
+            <span className="mini-status-text">
+              {isRecording ? `Recording ${formatTime(elapsed)}` : 'Idle'}
+            </span>
+          </>
+        )}
+      </div>
     </div>
   );
 }

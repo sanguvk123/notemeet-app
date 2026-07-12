@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/tauri';
 import { listen } from '@tauri-apps/api/event';
+import { formatDate, groupByDate, formatTime } from './utils';
 
 const roles = [
   { value: 'meeting', label: 'Meeting', icon: '💼' },
@@ -9,25 +10,6 @@ const roles = [
   { value: 'interview', label: 'Interview', icon: '🎯' },
   { value: 'other', label: 'Other', icon: '📝' },
 ];
-
-function formatDate(dateStr) {
-  const d = new Date(dateStr);
-  const now = new Date();
-  const diff = now - d;
-  if (diff < 86400000) return 'Today';
-  if (diff < 172800000) return 'Yesterday';
-  return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
-}
-
-function groupByDate(notes) {
-  const groups = {};
-  for (const n of notes) {
-    const key = formatDate(n.date);
-    if (!groups[key]) groups[key] = [];
-    groups[key].push(n);
-  }
-  return groups;
-}
 
 function ChatPanel({ note, onClose }) {
   const [messages, setMessages] = useState([]);
@@ -221,12 +203,6 @@ export default function App() {
     setTitle('');
   };
 
-  const formatTime = (s) => {
-    const m = Math.floor(s / 60);
-    const sec = s % 60;
-    return `${m}:${sec.toString().padStart(2, '0')}`;
-  };
-
   const groups = groupByDate(notes);
 
   return (
@@ -234,7 +210,12 @@ export default function App() {
       <aside className="sidebar">
         <div className="sidebar-header">
           <div className="logo">NoteMeet</div>
-          <span className="badge">beta</span>
+          <div className="header-right">
+            <button className="mini-launch-btn" onClick={() => invoke('create_mini_window')} title="Open Mini Recorder">
+              ⤢
+            </button>
+            <span className="badge">beta</span>
+          </div>
         </div>
 
         <div className="sidebar-actions">

@@ -167,6 +167,43 @@ fn ask_about_note(note_json: String, question: String, history: Vec<llm::ChatMes
 }
 
 #[tauri::command]
+fn create_mini_window(app_handle: tauri::AppHandle) -> Result<(), String> {
+    use tauri::WindowUrl;
+
+    if app_handle.get_window("mini-recorder").is_some() {
+        let win = app_handle.get_window("mini-recorder").unwrap();
+        let _ = win.show();
+        let _ = win.set_focus();
+        return Ok(());
+    }
+
+    let window = tauri::WindowBuilder::new(
+        &app_handle,
+        "mini-recorder",
+        WindowUrl::App("?mini=true".into()),
+    )
+    .title("")
+    .inner_size(200.0, 56.0)
+    .resizable(false)
+    .decorations(false)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .build()
+    .map_err(|e| format!("Mini window: {}", e))?;
+
+    if let Some(monitor) = window.current_monitor().map_err(|e| e.to_string())? {
+        let scale = monitor.scale_factor();
+        let size = monitor.size();
+        let pos = monitor.position();
+        let x = pos.x as f64 / scale + size.width as f64 / scale - 220.0;
+        let y = pos.y as f64 / scale + 40.0;
+        let _ = window.set_position(tauri::LogicalPosition::new(x, y));
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
 fn toggle_recording(
     app_handle: tauri::AppHandle,
     state: State<AppState>,
@@ -220,6 +257,7 @@ fn main() {
             load_notes,
             read_audio_file,
             ask_about_note,
+            create_mini_window,
         ])
         .on_system_tray_event(|app, event| match event {
             SystemTrayEvent::LeftClick { .. } => {
@@ -293,4 +331,144 @@ fn main() {
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_note_serializes_to_camel_case() {
+        let note = Note {
+            id: "test-id".into(),
+            title: "Test".into(),
+            date: "2026-01-01T00:00:00Z".into(),
+            short_summary: "Short".into(),
+            full_summary: "Full".into(),
+            action_items: vec!["Do X".into()],
+            promises: vec![],
+            speakers: vec!["Alice".into()],
+            tone: "professional".into(),
+            speaker_tone: std::collections::HashMap::new(),
+            transcript: "Hello".into(),
+            meeting_type: "meeting".into(),
+            audio_file: "".into(),
+            audio_duration_s: 60.0,
+        };
+
+        let json = serde_json::to_string(&note).expect("serialize");
+        assert!(json.contains("shortSummary"));
+        assert!(json.contains("fullSummary"));
+        assert!(json.contains("actionItems"));
+        assert!(json.contains("meetingType"));
+        assert!(json.contains("audioFile"));
+        assert!(json.contains("audioDurationS"));
+        assert!(json.contains("speakerTone"));
+        assert!(!json.contains("short_summary"));
+    }
+
+    #[test]
+    fn test_note_deserializes_from_camel_case() {
+        let json = r#"{
+            "id": "abc123",
+            "title": "Standup",
+            "date": "2026-01-01T00:00:00Z",
+            "shortSummary": "Quick summary",
+            "fullSummary": "Longer text here",
+            "actionItems": ["Task 1", "Task 2"],
+            "promises": ["I will do X"],
+            "speakers": ["Bob"],
+            "tone": "casual",
+            "speakerTone": {"Bob": "enthusiastic"},
+            "transcript": "Transcript text",
+            "meetingType": "standup",
+            "audioFile": "/tmp/a.wav",
+            "audioDurationS": 45.5
+        }"#;
+
+        let note: Note = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(note.id, "abc123");
+        assert_eq!(note.short_summary, "Quick summary");
+        assert_eq!(note.action_items.len(), 2);
+        assert_eq!(note.speaker_tone.get("Bob"), Some(&"enthusiastic".to_string()));
+        assert!((note.audio_duration_s - 45.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_note_clone_works() {
+        let note = Note {
+            id: "clone-test".into(),
+            title: "Original".into(),
+            date: "2026-01-01T00:00:00Z".into(),
+            short_summary: "Summary".into(),
+            full_summary: "Full".into(),
+            action_items: vec!["A".into()],
+            promises: vec![],
+            speakers: vec![],
+            tone: "".into(),
+            speaker_tone: std::collections::HashMap::new(),
+            transcript: "".into(),
+            meeting_type: "meeting".into(),
+            audio_file: "".into(),
+            audio_duration_s: 0.0,
+        };
+        let cloned = note.clone();
+        assert_eq!(cloned.id, note.id);
+        assert_eq!(cloned.title, note.title);
+        assert_eq!(cloned.action_items, note.action_items);
+    }
+
+    #[test]
+    fn test_save_wav_creates_file() {
+        let tmp = tempfile::tempdir().expect("Failed to create temp dir");
+        let test_home = tmp.path().to_path_buf();
+        std::env::set_var("HOME", &test_home);
+
+        let samples = vec![100i16, -100, 200, -200, 0];
+        let result = save_wav(&samples, 16000, "test-recording");
+        assert!(result.is_ok());
+
+        let path = result.unwrap();
+        let wav_path = std::path::Path::new(&path);
+        assert!(wav_path.exists());
+
+        let metadata = std::fs::metadata(&wav_path).expect("Failed to read file metadata");
+        assert!(metadata.len() > 44); // WAV header is 44 bytes minimum
+    }
+
+    #[test]
+    fn test_save_wav_can_be_read_back() {
+        let tmp = tempfile::tempdir().expect("Failed to create temp dir");
+        std::env::set_var("HOME", &tmp.path().to_path_buf());
+
+        let samples: Vec<i16> = (0..1600).map(|i| (i as f32 * 0.1) as i16).collect();
+        let path = save_wav(&samples, 16000, "roundtrip-test").expect("Failed to save WAV");
+
+        let mut reader = hound::WavReader::open(&path).expect("Failed to open WAV");
+        let spec = reader.spec();
+        assert_eq!(spec.channels, 1);
+        assert_eq!(spec.sample_rate, 16000);
+        assert_eq!(spec.bits_per_sample, 16);
+
+        let read_samples: Vec<i16> = reader
+            .samples()
+            .filter_map(|s| s.ok())
+            .collect();
+        assert_eq!(read_samples.len(), 1600);
+        assert_eq!(read_samples[0], 0);
+    }
+
+    #[test]
+    fn test_save_wav_empty_samples() {
+        let tmp = tempfile::tempdir().expect("Failed to create temp dir");
+        std::env::set_var("HOME", &tmp.path().to_path_buf());
+
+        let result = save_wav(&[], 44100, "empty-recording");
+        assert!(result.is_ok());
+
+        let path = result.unwrap();
+        let reader = hound::WavReader::open(&path).expect("Failed to open");
+        let count = reader.into_samples::<i16>().filter_map(|s| s.ok()).count();
+        assert_eq!(count, 0);
+    }
 }

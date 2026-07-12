@@ -15,7 +15,10 @@
       "all": false,
       "shell": { "open": true },
       "dialog": { "open": true, "save": true },
-      "fs": { "readFile": true, "writeFile": true }
+      "fs": { "readFile": true, "writeFile": true },
+      "window": {
+        "all": true
+      }
     },
     "bundle": {
       "active": true,

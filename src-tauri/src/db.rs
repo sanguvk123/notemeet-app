@@ -11,7 +11,11 @@ impl Database {
     pub fn new() -> Result<Self, String> {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
         let dir = PathBuf::from(&home).join("NoteMeet");
-        std::fs::create_dir_all(&dir).map_err(|e| format!("DB dir: {}", e))?;
+        Self::new_at(&dir)
+    }
+
+    pub fn new_at(dir: &PathBuf) -> Result<Self, String> {
+        std::fs::create_dir_all(dir).map_err(|e| format!("DB dir: {}", e))?;
 
         let path = dir.join("notemeet.db");
         eprintln!("[NoteMeet] DB path: {}", path.display());
@@ -125,5 +129,152 @@ impl Database {
         }
 
         Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_test_note(id: &str, title: &str) -> Note {
+        let mut speaker_tone = std::collections::HashMap::new();
+        speaker_tone.insert("Alice".to_string(), "confident".to_string());
+
+        Note {
+            id: id.to_string(),
+            title: title.to_string(),
+            date: "2026-01-15T10:00:00Z".to_string(),
+            short_summary: "Quick sync on roadmap.".to_string(),
+            full_summary: "Discussed Q1 priorities. Alice will handle the API. Bob will work on the frontend.".to_string(),
+            action_items: vec!["Alice: Ship API by Friday".into(), "Bob: UI mockups by Monday".into()],
+            promises: vec!["Alice will send the spec".into()],
+            speakers: vec!["Alice".into(), "Bob".into()],
+            tone: "professional".to_string(),
+            speaker_tone,
+            transcript: "Hello everyone. Let's talk about the roadmap.".to_string(),
+            meeting_type: "meeting".to_string(),
+            audio_file: "/tmp/test.wav".to_string(),
+            audio_duration_s: 120.5,
+        }
+    }
+
+    fn make_test_db() -> (Database, tempfile::TempDir) {
+        let tmp = tempfile::tempdir().expect("Failed to create temp dir");
+        let db = Database::new_at(&tmp.path().to_path_buf()).expect("Failed to create test DB");
+        (db, tmp)
+    }
+
+    #[test]
+    fn test_save_and_load_roundtrip() {
+        let (db, _tmp) = make_test_db();
+        let note = make_test_note("test-1", "Sprint Planning");
+
+        db.save_note(&note).expect("Failed to save note");
+        let loaded = db.load_notes().expect("Failed to load notes");
+
+        assert_eq!(loaded.len(), 1);
+        let n = &loaded[0];
+        assert_eq!(n.id, "test-1");
+        assert_eq!(n.title, "Sprint Planning");
+        assert_eq!(n.short_summary, "Quick sync on roadmap.");
+        assert_eq!(n.action_items.len(), 2);
+        assert_eq!(n.action_items[0], "Alice: Ship API by Friday");
+        assert_eq!(n.promises.len(), 1);
+        assert_eq!(n.speakers, vec!["Alice", "Bob"]);
+        assert_eq!(n.tone, "professional");
+        assert_eq!(n.speaker_tone.get("Alice"), Some(&"confident".to_string()));
+        assert_eq!(n.meeting_type, "meeting");
+        assert!((n.audio_duration_s - 120.5).abs() < 0.001);
+        assert_eq!(n.audio_file, "/tmp/test.wav");
+    }
+
+    #[test]
+    fn test_load_empty_db() {
+        let (db, _tmp) = make_test_db();
+        let loaded = db.load_notes().expect("Failed to load");
+        assert!(loaded.is_empty());
+    }
+
+    #[test]
+    fn test_save_multiple_notes() {
+        let (db, _tmp) = make_test_db();
+        let n1 = make_test_note("note-1", "Meeting A");
+        let n2 = make_test_note("note-2", "Meeting B");
+        let n3 = make_test_note("note-3", "Meeting C");
+
+        db.save_note(&n1).unwrap();
+        db.save_note(&n2).unwrap();
+        db.save_note(&n3).unwrap();
+
+        let loaded = db.load_notes().unwrap();
+        assert_eq!(loaded.len(), 3);
+    }
+
+    #[test]
+    fn test_replace_existing_note() {
+        let (db, _tmp) = make_test_db();
+        let mut note = make_test_note("replace-1", "Original Title");
+        db.save_note(&note).unwrap();
+
+        note.title = "Updated Title".to_string();
+        db.save_note(&note).unwrap();
+
+        let loaded = db.load_notes().unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].title, "Updated Title");
+    }
+
+    #[test]
+    fn test_save_note_with_empty_fields() {
+        let (db, _tmp) = make_test_db();
+        let note = Note {
+            id: "empty-1".to_string(),
+            title: "".to_string(),
+            date: "2026-01-15T10:00:00Z".to_string(),
+            short_summary: "".to_string(),
+            full_summary: "".to_string(),
+            action_items: vec![],
+            promises: vec![],
+            speakers: vec![],
+            tone: "".to_string(),
+            speaker_tone: std::collections::HashMap::new(),
+            transcript: "".to_string(),
+            meeting_type: "other".to_string(),
+            audio_file: "".to_string(),
+            audio_duration_s: 0.0,
+        };
+
+        db.save_note(&note).unwrap();
+        let loaded = db.load_notes().unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].title, "");
+        assert!(loaded[0].action_items.is_empty());
+        assert!(loaded[0].speaker_tone.is_empty());
+    }
+
+    #[test]
+    fn test_save_note_with_special_characters() {
+        let (db, _tmp) = make_test_db();
+        let note = Note {
+            id: "special-1".to_string(),
+            title: "Meeting with O'Brien & Co.".to_string(),
+            date: "2026-01-15T10:00:00Z".to_string(),
+            short_summary: "Discussed 100% of items. Cost: ₹500.".to_string(),
+            full_summary: "We talked about \"quotes\" and 'apostrophes'.".to_string(),
+            action_items: vec!["Fix bug #42".into()],
+            promises: vec![],
+            speakers: vec![],
+            tone: "casual".to_string(),
+            speaker_tone: std::collections::HashMap::new(),
+            transcript: "".to_string(),
+            meeting_type: "meeting".to_string(),
+            audio_file: "".to_string(),
+            audio_duration_s: 0.0,
+        };
+
+        db.save_note(&note).unwrap();
+        let loaded = db.load_notes().unwrap();
+        assert_eq!(loaded[0].title, "Meeting with O'Brien & Co.");
+        assert_eq!(loaded[0].short_summary, "Discussed 100% of items. Cost: ₹500.");
     }
 }
