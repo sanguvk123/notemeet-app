@@ -56,8 +56,6 @@ export default function MiniRecorder() {
             const { WebviewWindow } = await import('@tauri-apps/api/window');
             const main = WebviewWindow.getByLabel('main');
             if (main) {
-              await main.show();
-              await main.setFocus();
               await main.emit('note-ready', result);
             }
           } catch (_) {}

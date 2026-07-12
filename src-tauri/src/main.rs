@@ -280,8 +280,6 @@ fn main() {
                         if let Ok(result) = stop_recording(state, "Quick Note".to_string()) {
                             if let Some(window) = app.get_window("main") {
                                 let _ = window.emit("note-ready", result);
-                                let _ = window.show();
-                                let _ = window.set_focus();
                             }
                         }
                         // Update tray menu text
@@ -300,8 +298,6 @@ fn main() {
                             let _ = item.set_title("Stop Recording");
                         }
                         if let Some(window) = app.get_window("main") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
                             let _ = window.emit("recording-started", ());
                         }
                     }
