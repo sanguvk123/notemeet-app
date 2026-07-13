@@ -1,7 +1,18 @@
 use crate::Note;
 use rusqlite::Connection;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Mutex;
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CalendarEvent {
+    pub id: String,
+    pub title: String,
+    pub date: String,
+    pub time: String,
+    pub notes: String,
+}
 
 pub struct Database {
     conn: Mutex<Connection>,
@@ -41,6 +52,13 @@ impl Database {
                 audio_file   TEXT NOT NULL DEFAULT '',
                 audio_duration_s REAL NOT NULL DEFAULT 0.0,
                 created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE TABLE IF NOT EXISTS calendar_events (
+                id     TEXT PRIMARY KEY,
+                title  TEXT NOT NULL,
+                date   TEXT NOT NULL,
+                time   TEXT NOT NULL DEFAULT '',
+                notes  TEXT NOT NULL DEFAULT ''
             );",
         )
         .map_err(|e| format!("DB init: {}", e))?;
@@ -129,6 +147,48 @@ impl Database {
         }
 
         Ok(result)
+    }
+
+    pub fn add_event(&self, event: &CalendarEvent) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| format!("DB lock: {}", e))?;
+        conn.execute(
+            "INSERT INTO calendar_events (id, title, date, time, notes) VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![event.id, event.title, event.date, event.time, event.notes],
+        )
+        .map_err(|e| format!("DB event insert: {}", e))?;
+        Ok(())
+    }
+
+    pub fn load_events(&self) -> Result<Vec<CalendarEvent>, String> {
+        let conn = self.conn.lock().map_err(|e| format!("DB lock: {}", e))?;
+        let mut stmt = conn
+            .prepare("SELECT id, title, date, time, notes FROM calendar_events ORDER BY date ASC, time ASC")
+            .map_err(|e| format!("DB prepare events: {}", e))?;
+
+        let events = stmt
+            .query_map([], |row| {
+                Ok(CalendarEvent {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                    date: row.get(2)?,
+                    time: row.get(3)?,
+                    notes: row.get(4)?,
+                })
+            })
+            .map_err(|e| format!("DB events query: {}", e))?;
+
+        let mut result = Vec::new();
+        for event in events {
+            result.push(event.map_err(|e| format!("DB event row: {}", e))?);
+        }
+        Ok(result)
+    }
+
+    pub fn delete_event(&self, id: &str) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| format!("DB lock: {}", e))?;
+        conn.execute("DELETE FROM calendar_events WHERE id = ?1", rusqlite::params![id])
+            .map_err(|e| format!("DB event delete: {}", e))?;
+        Ok(())
     }
 }
 

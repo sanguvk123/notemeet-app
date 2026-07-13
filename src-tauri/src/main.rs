@@ -167,6 +167,34 @@ fn ask_about_note(note_json: String, question: String, history: Vec<llm::ChatMes
 }
 
 #[tauri::command]
+fn ask_all_notes(all_notes_json: String, question: String, history: Vec<llm::ChatMessage>) -> Result<String, String> {
+    llm::chat_all_notes(&all_notes_json, &question, &history)
+}
+
+#[tauri::command]
+fn add_calendar_event(state: State<AppState>, title: String, date: String, time: String, notes: String) -> Result<db::CalendarEvent, String> {
+    let event = db::CalendarEvent {
+        id: uuid::Uuid::new_v4().to_string(),
+        title,
+        date,
+        time,
+        notes,
+    };
+    state.db.add_event(&event)?;
+    Ok(event)
+}
+
+#[tauri::command]
+fn load_calendar_events(state: State<AppState>) -> Result<Vec<db::CalendarEvent>, String> {
+    state.db.load_events()
+}
+
+#[tauri::command]
+fn delete_calendar_event(state: State<AppState>, event_id: String) -> Result<(), String> {
+    state.db.delete_event(&event_id)
+}
+
+#[tauri::command]
 fn create_mini_window(app_handle: tauri::AppHandle) -> Result<(), String> {
     use tauri::WindowUrl;
 
@@ -257,6 +285,10 @@ fn main() {
             load_notes,
             read_audio_file,
             ask_about_note,
+            ask_all_notes,
+            add_calendar_event,
+            load_calendar_events,
+            delete_calendar_event,
             create_mini_window,
         ])
         .on_system_tray_event(|app, event| match event {
