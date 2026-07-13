@@ -134,7 +134,7 @@ pub fn spawn_live_transcriber(
     let min_chunk = (sample_rate as usize) * 2; // 2 seconds minimum per chunk
     let model_path = std::env::var("WHISPER_MODEL_PATH").unwrap_or_else(|_| {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/sangameshk".to_string());
-        format!("{}/notemeet-app/src-tauri/whisper/models/ggml-tiny.en.bin", home)
+        format!("{}/notemeet-app/src-tauri/whisper/models/ggml-base.bin", home)
     });
 
     thread::spawn(move || {
