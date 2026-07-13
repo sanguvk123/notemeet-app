@@ -39,18 +39,33 @@ export default function CalendarPage({ isGuest }) {
     checkAuth();
   }, []);
 
-  const showError = (msg) => {
-    setError(msg);
-    setTimeout(() => setError(''), 5000);
-  };
-
   const checkAuth = async () => {
     try {
       const status = await invoke('google_auth_status');
       setAuthStatus({ signedIn: status.signedIn, email: status.email || '' });
+      if (status.signedIn) {
+        await doSync();
+      }
     } catch (e) {
       showError('Failed to check auth status');
     }
+  };
+
+  const showError = (msg) => {
+    setError(msg);
+    setTimeout(() => setError(''), 8000);
+  };
+
+  const doSync = async () => {
+    setSyncing(true);
+    setError('');
+    try {
+      const events = await invoke('google_sync_events');
+      if (events?.length) setGoogleEvents(events);
+    } catch (e) {
+      showError(String(e));
+    }
+    setSyncing(false);
   };
 
   const signIn = async () => {
@@ -61,8 +76,7 @@ export default function CalendarPage({ isGuest }) {
       const status = await invoke('google_auth_status');
       setAuthStatus({ signedIn: status.signedIn, email: status.email || '' });
       if (status.signedIn) {
-        const events = await invoke('google_sync_events');
-        if (events?.length) setGoogleEvents(events);
+        await doSync();
       }
     } catch (e) {
       showError(String(e));
@@ -82,15 +96,7 @@ export default function CalendarPage({ isGuest }) {
 
   const syncGoogle = async () => {
     if (!authStatus.signedIn) return;
-    setSyncing(true);
-    setError('');
-    try {
-      const events = await invoke('google_sync_events');
-      if (events?.length) setGoogleEvents(events);
-    } catch (e) {
-      showError(String(e));
-    }
-    setSyncing(false);
+    await doSync();
   };
 
   const addEvent = async () => {
@@ -105,8 +111,9 @@ export default function CalendarPage({ isGuest }) {
       setLocalEvents((prev) => [...prev, newEvent]);
       setShowForm(false);
       setFormData({ title: '', date: '', time: '', notes: '' });
+      showError('Event saved');
     } catch (e) {
-      console.error(e);
+      showError(String(e));
     }
   };
 
@@ -115,7 +122,7 @@ export default function CalendarPage({ isGuest }) {
       await invoke('delete_calendar_event', { eventId: id });
       setLocalEvents((prev) => prev.filter((e) => e.id !== id));
     } catch (e) {
-      console.error(e);
+      showError(String(e));
     }
   };
 
@@ -144,6 +151,30 @@ export default function CalendarPage({ isGuest }) {
     const ds = `${currentYear}-${String(currentMonth + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
     return allEvents.filter((e) => e.date === ds);
   };
+
+  function todayStr() {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  }
+  function nowStr() {
+    const d = new Date();
+    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  }
+  function formatLabel(dateStr) {
+    const d = new Date(dateStr + 'T00:00:00');
+    const now = new Date();
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    if (dateStr === today) return 'Today';
+    const tmrw = new Date(now);
+    tmrw.setDate(tmrw.getDate() + 1);
+    const tomorrow = `${tmrw.getFullYear()}-${String(tmrw.getMonth() + 1).padStart(2, '0')}-${String(tmrw.getDate()).padStart(2, '0')}`;
+    if (dateStr === tomorrow) return 'Tomorrow';
+    return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+  }
+
+  const upcoming = [...allEvents]
+    .filter((e) => e.date >= todayStr() || (e.date === todayStr() && e.time >= nowStr()))
+    .sort((a, b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time));
 
   return (
     <main className="main-content calendar-content">
@@ -181,7 +212,40 @@ export default function CalendarPage({ isGuest }) {
           </div>
         </div>
 
-        {error && <div className="calendar-error">{error}</div>}
+        {error && <div className={`calendar-error ${error === 'Event saved' ? 'calendar-success' : ''}`}>{error}</div>}
+
+        {(upcoming.length > 0 || allEvents.length > 0) && (
+          <div className="calendar-upcoming">
+            <h4 className="calendar-upcoming-title">Upcoming</h4>
+            {upcoming.length > 0 ? (
+              <div className="calendar-upcoming-list">
+                {upcoming.slice(0, 5).map((e, i) => (
+                  <div key={`${e.source}-${e.id || i}`} className={`calendar-upcoming-item ${e.source === 'google' ? 'upcoming-google' : 'upcoming-local'}`}>
+                    <div className="upcoming-time">
+                      {e.time ? e.time : 'All day'}
+                    </div>
+                    <div className="upcoming-info">
+                      <div className="upcoming-title">{e.title}</div>
+                      <div className="upcoming-date">{formatLabel(e.date)}</div>
+                    </div>
+                    {e.source === 'google' && <span className="upcoming-badge">G</span>}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="calendar-upcoming-empty">No upcoming events</p>
+            )}
+          </div>
+        )}
+
+        {!isGuest && (
+          <div className="calendar-sync-status">
+            <span className={`sync-dot ${authStatus.signedIn ? 'sync-dot-on' : 'sync-dot-off'}`} />
+            {authStatus.signedIn
+              ? `${googleEvents.length} Google event${googleEvents.length !== 1 ? 's' : ''} loaded`
+              : 'Not connected to Google'}
+          </div>
+        )}
 
         {showForm && (
           <div className="calendar-form">
@@ -189,6 +253,7 @@ export default function CalendarPage({ isGuest }) {
               onChange={(e) => setFormData({ ...formData, title: e.target.value })} />
             <input type="date" className="title-input" value={formData.date}
               onChange={(e) => setFormData({ ...formData, date: e.target.value })} />
+            <label className="cal-form-label">Time (optional — leave blank for all-day)</label>
             <input type="time" className="title-input" value={formData.time}
               onChange={(e) => setFormData({ ...formData, time: e.target.value })} />
             <textarea className="title-input calendar-notes-input" placeholder="Notes (optional)"
