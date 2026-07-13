@@ -302,6 +302,7 @@ pub fn fetch_calendar_events() -> Result<Vec<GoogleEvent>, String> {
 
     #[derive(Debug, Deserialize)]
     struct CalendarDateTime {
+        #[serde(rename = "dateTime")]
         date_time: Option<String>,
         date: Option<String>,
     }
