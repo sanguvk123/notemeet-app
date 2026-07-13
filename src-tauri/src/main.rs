@@ -196,6 +196,20 @@ fn delete_calendar_event(state: State<AppState>, event_id: String) -> Result<(),
 }
 
 #[tauri::command]
+fn update_note(state: State<AppState>, note: Note) -> Result<(), String> {
+    state.db.update_note(&note)?;
+    log!("Note updated: {}", note.id);
+    Ok(())
+}
+
+#[tauri::command]
+fn delete_note(state: State<AppState>, note_id: String) -> Result<(), String> {
+    state.db.delete_note(&note_id)?;
+    log!("Note deleted: {}", note_id);
+    Ok(())
+}
+
+#[tauri::command]
 fn google_auth_status() -> Result<serde_json::Value, String> {
     google::auth_status()
 }
@@ -309,6 +323,8 @@ fn main() {
             stop_recording,
             toggle_recording,
             load_notes,
+            update_note,
+            delete_note,
             read_audio_file,
             ask_about_note,
             ask_all_notes,

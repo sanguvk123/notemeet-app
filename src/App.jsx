@@ -7,13 +7,29 @@ import NotesPage from './pages/NotesPage';
 import CalendarPage from './pages/CalendarPage';
 import LoginPage from './pages/LoginPage';
 
+let isTauriEnv = null;
+async function detectTauri() {
+  if (isTauriEnv !== null) return isTauriEnv;
+  try {
+    await invoke('google_auth_status');
+    isTauriEnv = true;
+  } catch {
+    isTauriEnv = false;
+  }
+  return isTauriEnv;
+}
+
 function Layout({ email, isGuest, onSignOut, onSignIn }) {
   return (
     <div className="app">
       <nav className="nav-sidebar">
         <div className="nav-header">
-          <div className="logo">NoteMeet</div>
-          <span className="badge">beta</span>
+          <svg width="28" height="28" viewBox="0 0 100 100" fill="none">
+            <rect x="2" y="2" width="96" height="96" rx="20" fill="#000" stroke="var(--border2)" strokeWidth="2"/>
+            <line x1="30" y1="25" x2="30" y2="75" stroke="var(--text)" strokeWidth="10" strokeLinecap="round"/>
+            <line x1="30" y1="75" x2="70" y2="25" stroke="var(--text)" strokeWidth="10" strokeLinecap="round"/>
+            <line x1="70" y1="25" x2="70" y2="75" stroke="var(--text)" strokeWidth="10" strokeLinecap="round"/>
+          </svg>
         </div>
         <div className="nav-links">
           <NavLink to="/home" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
@@ -88,15 +104,20 @@ function Layout({ email, isGuest, onSignOut, onSignIn }) {
 
 export default function App() {
   const [auth, setAuth] = useState({ checking: true, signedIn: false, guest: false, email: '' });
+  const [isWeb, setIsWeb] = useState(null);
 
   useEffect(() => {
     (async () => {
-      try {
-        const status = await invoke('google_auth_status');
-        setAuth({ checking: false, signedIn: status.signedIn, guest: false, email: status.email || '' });
-      } catch (_) {
-        setAuth({ checking: false, signedIn: false, guest: false, email: '' });
+      const web = !(await detectTauri());
+      setIsWeb(web);
+      if (!web) {
+        try {
+          const status = await invoke('google_auth_status');
+          setAuth({ checking: false, signedIn: status.signedIn, guest: false, email: status.email || '' });
+          return;
+        } catch (_) {}
       }
+      setAuth({ checking: false, signedIn: false, guest: false, email: '' });
     })();
   }, []);
 
@@ -108,9 +129,12 @@ export default function App() {
     );
   }
 
-  if (!auth.signedIn && !auth.guest) {
+  if (isWeb || (!auth.signedIn && !auth.guest)) {
     return (
-      <LoginPage onSignedIn={(status) => setAuth({ checking: false, signedIn: status.signedIn, guest: !!status.guest, email: status.email || '' })} />
+      <LoginPage isWeb={isWeb} onSignedIn={(status) => {
+        if (isWeb) return;
+        setAuth({ checking: false, signedIn: status.signedIn, guest: !!status.guest, email: status.email || '' });
+      }} />
     );
   }
 

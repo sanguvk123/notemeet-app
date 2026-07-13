@@ -33,35 +33,43 @@ impl Database {
 
         let conn = Connection::open(&path).map_err(|e| format!("DB open: {}", e))?;
 
-        // Drop old schema and recreate (beta — we'll migrate properly later)
-        conn.execute_batch(
-            "DROP TABLE IF EXISTS notes;
-            CREATE TABLE notes (
-                id           TEXT PRIMARY KEY,
-                title        TEXT NOT NULL DEFAULT '',
-                date         TEXT NOT NULL,
-                short_summary TEXT NOT NULL DEFAULT '',
-                full_summary TEXT NOT NULL DEFAULT '',
-                action_items TEXT NOT NULL DEFAULT '[]',
-                promises     TEXT NOT NULL DEFAULT '[]',
-                speakers     TEXT NOT NULL DEFAULT '[]',
-                tone         TEXT NOT NULL DEFAULT '',
-                speaker_tone TEXT NOT NULL DEFAULT '{}',
-                transcript   TEXT NOT NULL DEFAULT '',
-                meeting_type TEXT NOT NULL DEFAULT 'meeting',
-                audio_file   TEXT NOT NULL DEFAULT '',
-                audio_duration_s REAL NOT NULL DEFAULT 0.0,
-                created_at   TEXT NOT NULL DEFAULT (datetime('now'))
-            );
-            CREATE TABLE IF NOT EXISTS calendar_events (
-                id     TEXT PRIMARY KEY,
-                title  TEXT NOT NULL,
-                date   TEXT NOT NULL,
-                time   TEXT NOT NULL DEFAULT '',
-                notes  TEXT NOT NULL DEFAULT ''
-            );",
-        )
-        .map_err(|e| format!("DB init: {}", e))?;
+        let version: i32 = conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap_or(0);
+
+        if version < 1 {
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS notes (
+                    id           TEXT PRIMARY KEY,
+                    title        TEXT NOT NULL DEFAULT '',
+                    date         TEXT NOT NULL,
+                    short_summary TEXT NOT NULL DEFAULT '',
+                    full_summary TEXT NOT NULL DEFAULT '',
+                    action_items TEXT NOT NULL DEFAULT '[]',
+                    promises     TEXT NOT NULL DEFAULT '[]',
+                    speakers     TEXT NOT NULL DEFAULT '[]',
+                    tone         TEXT NOT NULL DEFAULT '',
+                    speaker_tone TEXT NOT NULL DEFAULT '{}',
+                    transcript   TEXT NOT NULL DEFAULT '',
+                    meeting_type TEXT NOT NULL DEFAULT 'meeting',
+                    audio_file   TEXT NOT NULL DEFAULT '',
+                    audio_duration_s REAL NOT NULL DEFAULT 0.0,
+                    created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+                );
+                CREATE TABLE IF NOT EXISTS calendar_events (
+                    id     TEXT PRIMARY KEY,
+                    title  TEXT NOT NULL,
+                    date   TEXT NOT NULL,
+                    time   TEXT NOT NULL DEFAULT '',
+                    notes  TEXT NOT NULL DEFAULT ''
+                );
+                PRAGMA user_version = 1;",
+            )
+            .map_err(|e| format!("DB init: {}", e))?;
+            eprintln!("[NoteMeet] DB migrated to version 1");
+        } else {
+            eprintln!("[NoteMeet] DB schema version {} — no migration needed", version);
+        }
 
         eprintln!("[NoteMeet] DB initialized");
         Ok(Database {
@@ -182,6 +190,46 @@ impl Database {
             result.push(event.map_err(|e| format!("DB event row: {}", e))?);
         }
         Ok(result)
+    }
+
+    pub fn update_note(&self, note: &Note) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| format!("DB lock: {}", e))?;
+
+        let to_json = |v: &Vec<String>| -> String {
+            serde_json::to_string(v).unwrap_or_else(|_| "[]".to_string())
+        };
+
+        let speaker_tone_json =
+            serde_json::to_string(&note.speaker_tone).unwrap_or_else(|_| "{}".to_string());
+
+        conn.execute(
+            "UPDATE notes SET title=?1, short_summary=?2, full_summary=?3, action_items=?4, promises=?5, speakers=?6, tone=?7, speaker_tone=?8, transcript=?9, meeting_type=?10, audio_file=?11, audio_duration_s=?12 WHERE id=?13",
+            rusqlite::params![
+                note.title,
+                note.short_summary,
+                note.full_summary,
+                to_json(&note.action_items),
+                to_json(&note.promises),
+                to_json(&note.speakers),
+                note.tone,
+                speaker_tone_json,
+                note.transcript,
+                note.meeting_type,
+                note.audio_file,
+                note.audio_duration_s,
+                note.id,
+            ],
+        )
+        .map_err(|e| format!("DB update note: {}", e))?;
+
+        Ok(())
+    }
+
+    pub fn delete_note(&self, id: &str) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| format!("DB lock: {}", e))?;
+        conn.execute("DELETE FROM notes WHERE id = ?1", rusqlite::params![id])
+            .map_err(|e| format!("DB delete note: {}", e))?;
+        Ok(())
     }
 
     pub fn delete_event(&self, id: &str) -> Result<(), String> {

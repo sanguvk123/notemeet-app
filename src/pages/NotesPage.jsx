@@ -12,13 +12,41 @@ const roles = [
   { value: 'other', label: 'Other' },
 ];
 
+function EditField({ value, onChange, isEditing, multiline }) {
+  if (!isEditing) return multiline
+    ? <p className="detail-full">{value}</p>
+    : <p className="detail-short">{value}</p>;
+
+  return multiline
+    ? <textarea className="note-edit-input note-edit-textarea" value={value} onChange={(e) => onChange(e.target.value)} />
+    : <input className="note-edit-input" value={value} onChange={(e) => onChange(e.target.value)} />;
+}
+
+function ConfirmModal({ message, onConfirm, onCancel }) {
+  return (
+    <div className="modal-overlay" onClick={onCancel}>
+      <div className="modal-box" onClick={(e) => e.stopPropagation()}>
+        <p className="modal-message">{message}</p>
+        <div className="modal-actions">
+          <button className="modal-cancel" onClick={onCancel}>Cancel</button>
+          <button className="modal-confirm" onClick={onConfirm}>Delete</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function NotesPage() {
-  const { notes, isRecording, status, transcript, elapsed, meetingType, setMeetingType, startRecording, stopRecording } = useNotes();
+  const { notes, isRecording, status, transcript, elapsed, meetingType, setMeetingType, startRecording, stopRecording, updateNote, deleteNote } = useNotes();
   const [selectedNote, setSelectedNote] = useState(null);
   const [processing, setProcessing] = useState(false);
   const [playingNoteId, setPlayingNoteId] = useState(null);
   const [audioUrl, setAudioUrl] = useState(null);
   const [showChat, setShowChat] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [editFields, setEditFields] = useState({ title: '', shortSummary: '', fullSummary: '', actionItems: '' });
   const [title, setTitle] = useState('');
   const audioRef = useRef(null);
 
@@ -59,10 +87,64 @@ export default function NotesPage() {
     setTitle('');
   };
 
+  const enterEditMode = () => {
+    if (!selectedNote) return;
+    setEditFields({
+      title: selectedNote.title,
+      shortSummary: selectedNote.shortSummary,
+      fullSummary: selectedNote.fullSummary,
+      actionItems: selectedNote.actionItems?.join('\n') || '',
+    });
+    setEditing(true);
+  };
+
+  const saveEdit = async () => {
+    if (!selectedNote) return;
+    setSaving(true);
+    const updated = {
+      ...selectedNote,
+      title: editFields.title,
+      shortSummary: editFields.shortSummary,
+      fullSummary: editFields.fullSummary,
+      actionItems: editFields.actionItems.split('\n').map((s) => s.trim()).filter(Boolean),
+    };
+    const ok = await updateNote(updated);
+    if (ok) setSelectedNote(updated);
+    setSaving(false);
+    setEditing(false);
+  };
+
+  const cancelEdit = () => {
+    setEditing(false);
+  };
+
+  const handleDelete = async () => {
+    if (!selectedNote) return;
+    const id = selectedNote.id;
+    setShowDeleteConfirm(false);
+    const ok = await deleteNote(id);
+    if (ok) setSelectedNote(null);
+  };
+
+  const handleSelectNote = (note) => {
+    if (editing) return;
+    setSelectedNote(note);
+    setShowChat(false);
+    setShowDeleteConfirm(false);
+  };
+
   const groups = groupByDate(notes);
 
   return (
     <>
+      {showDeleteConfirm && (
+        <ConfirmModal
+          message="Permanently delete this note? This cannot be undone."
+          onConfirm={handleDelete}
+          onCancel={() => setShowDeleteConfirm(false)}
+        />
+      )}
+
       <aside className="sidebar">
         <div className="sidebar-actions">
           {!isRecording && !processing && (
@@ -116,7 +198,7 @@ export default function NotesPage() {
                 <div
                   key={note.id}
                   className={`note-item ${selectedNote?.id === note.id ? 'active' : ''}`}
-                  onClick={() => { setSelectedNote(note); setShowChat(false); }}
+                  onClick={() => handleSelectNote(note)}
                 >
                   <div className="note-item-title">{note.shortSummary?.slice(0, 60) || note.title}</div>
                   <div className="note-item-meta">
@@ -135,7 +217,11 @@ export default function NotesPage() {
           <div className="note-detail">
             <div className="note-detail-header">
               <div>
-                <h1 className="note-detail-title">{selectedNote.title}</h1>
+                <h1 className="note-detail-title">
+                  {editing
+                    ? <input className="note-edit-input note-edit-title" value={editFields.title} onChange={(e) => setEditFields({ ...editFields, title: e.target.value })} />
+                    : selectedNote.title}
+                </h1>
                 <div className="note-detail-meta">
                   <span>{new Date(selectedNote.date).toLocaleString('en-IN')}</span>
                   <span className="meta-dot">·</span>
@@ -159,12 +245,25 @@ export default function NotesPage() {
                     {playingNoteId === selectedNote.id ? 'Stop' : 'Play'}
                   </button>
                 )}
-                <button
-                  className={`chat-btn ${showChat ? 'active' : ''}`}
-                  onClick={() => setShowChat(!showChat)}
-                >
-                  Ask AI
-                </button>
+                {editing ? (
+                  <>
+                    <button className="play-btn" onClick={saveEdit} disabled={saving}>
+                      {saving ? 'Saving...' : 'Save'}
+                    </button>
+                    <button className="chat-btn" onClick={cancelEdit}>Cancel</button>
+                  </>
+                ) : (
+                  <>
+                    <button className="play-btn" onClick={enterEditMode}>Edit</button>
+                    <button className="chat-btn" onClick={() => setShowDeleteConfirm(true)}>Delete</button>
+                    <button
+                      className={`chat-btn ${showChat ? 'active' : ''}`}
+                      onClick={() => setShowChat(!showChat)}
+                    >
+                      Ask AI
+                    </button>
+                  </>
+                )}
               </div>
             </div>
 
@@ -172,11 +271,15 @@ export default function NotesPage() {
               <div className="note-content">
                 <section className="detail-section">
                   <h3>Summary</h3>
-                  <p className="detail-short">{selectedNote.shortSummary}</p>
+                  <EditField value={editing ? editFields.shortSummary : selectedNote.shortSummary}
+                    onChange={(v) => setEditFields({ ...editFields, shortSummary: v })}
+                    isEditing={editing} />
                 </section>
                 <section className="detail-section">
                   <h3>Full Notes</h3>
-                  <p className="detail-full">{selectedNote.fullSummary}</p>
+                  <EditField value={editing ? editFields.fullSummary : selectedNote.fullSummary}
+                    onChange={(v) => setEditFields({ ...editFields, fullSummary: v })}
+                    isEditing={editing} multiline />
                 </section>
                 {selectedNote.speakers?.length > 0 && (
                   <section className="detail-section">
@@ -204,17 +307,25 @@ export default function NotesPage() {
                     </div>
                   </section>
                 )}
-                {selectedNote.actionItems?.length > 0 && (
-                  <section className="detail-section">
-                    <h3>Action Items</h3>
-                    <ul className="detail-list">
-                      {selectedNote.actionItems.map((item, i) => (
-                        <li key={i} className="action-item">{item}</li>
-                      ))}
-                    </ul>
-                  </section>
-                )}
-                {selectedNote.promises?.length > 0 && (
+                <section className="detail-section">
+                  <h3>Action Items</h3>
+                  {editing ? (
+                    <textarea className="note-edit-input note-edit-textarea" value={editFields.actionItems}
+                      onChange={(e) => setEditFields({ ...editFields, actionItems: e.target.value })}
+                      placeholder="One item per line" />
+                  ) : (
+                    selectedNote.actionItems?.length > 0 ? (
+                      <ul className="detail-list">
+                        {selectedNote.actionItems.map((item, i) => (
+                          <li key={i} className="action-item">{item}</li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="detail-full" style={{ color: 'var(--text3)' }}>No action items</p>
+                    )
+                  )}
+                </section>
+                {selectedNote.promises?.length > 0 && !editing && (
                   <section className="detail-section">
                     <h3>Promises & Commitments</h3>
                     <ul className="detail-list">

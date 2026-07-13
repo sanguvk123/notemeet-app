@@ -80,6 +80,28 @@ export function NoteProvider({ children }) {
     setStatus('idle');
   };
 
+  const updateNote = async (note) => {
+    try {
+      await invoke('update_note', { note });
+      setNotes((prev) => prev.map((n) => (n.id === note.id ? note : n)));
+      return true;
+    } catch (e) {
+      console.error('Failed to update note:', e);
+      return false;
+    }
+  };
+
+  const deleteNote = async (noteId) => {
+    try {
+      await invoke('delete_note', { noteId });
+      setNotes((prev) => prev.filter((n) => n.id !== noteId));
+      return true;
+    } catch (e) {
+      console.error('Failed to delete note:', e);
+      return false;
+    }
+  };
+
   return (
     <NoteContext.Provider value={{
       notes, setNotes,
@@ -89,6 +111,8 @@ export function NoteProvider({ children }) {
       elapsed,
       meetingType, setMeetingType,
       startRecording, stopRecording,
+      updateNote,
+      deleteNote,
     }}>
       {children}
     </NoteContext.Provider>
