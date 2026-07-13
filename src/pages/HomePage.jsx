@@ -47,21 +47,19 @@ export default function HomePage() {
           {messages.length === 0 && (
             <div className="home-chat-welcome">
               <div className="home-welcome-icon">
-                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                  <circle cx="12" cy="12" r="10"/>
-                  <path d="M12 6v2"/>
-                  <path d="M12 10v2"/>
-                  <path d="M12 14v2"/>
-                  <path d="M12 18v2"/>
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--text2)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12 3l1.5 3.5L17 5l-1.5 4.5L17 14l-3.5-1.5L12 16l-1.5-3.5L7 14l1.5-4.5L7 5l3.5 1.5L12 3z"/>
+                  <path d="M5 16l1 2 2 1-2 1-1 2-1-2-2-1 2-1 1-2z"/>
+                  <path d="M19 16l1 2 2 1-2 1-1 2-1-2-2-1 2-1 1-2z"/>
                 </svg>
               </div>
               <h3>Ask anything about your meetings</h3>
               <p className="home-welcome-hints">
-                Try questions like:<br />
-                "What were the key decisions from last week?"<br />
-                "Summarize all action items across my notes"<br />
-                "Who was assigned to the onboarding project?"<br />
-                "What was the general tone of recent meetings?"
+                Try asking:<br />
+                "Summarize last week's key decisions"<br />
+                "What are all my open action items?"<br />
+                "Give me a brief of every meeting this month"<br />
+                "What was discussed in the standup?"
               </p>
             </div>
           )}
