@@ -144,7 +144,7 @@ fn get_valid_token() -> Result<String, String> {
 
 pub fn start_auth_flow(app_handle: tauri::AppHandle) -> Result<String, String> {
     let cid = client_id()?;
-    let cs = client_secret()?;
+    let _cs = client_secret()?;
 
     let auth_url = format!(
         "{}?client_id={}&redirect_uri={}&response_type=code&scope={}&access_type=offline&prompt=consent",

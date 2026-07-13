@@ -92,14 +92,6 @@ export default function CalendarPage() {
     }
     setSyncing(false);
   };
-    try {
-      const events = await invoke('google_sync_events');
-      if (events?.length) setGoogleEvents(events);
-    } catch (e) {
-      console.error('Sync error:', e);
-    }
-    setSyncing(false);
-  };
 
   const addEvent = async () => {
     if (!formData.title.trim() || !formData.date) return;
