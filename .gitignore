@@ -1,0 +1,7 @@
+node_modules/
+dist/
+target/
+src-tauri/whisper/whisper.cpp/
+src-tauri/whisper/models/
+*.bin
+.DS_Store
