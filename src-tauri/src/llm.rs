@@ -253,6 +253,86 @@ Answer the user's questions based on this meeting note. Be concise and helpful. 
     Ok(content.to_string())
 }
 
+pub fn chat_all_notes(all_notes_json: &str, question: &str, history: &[ChatMessage]) -> Result<String, String> {
+    let api_key = load_api_key();
+
+    if api_key == "sk-or-v1-xxxxxxxx" || api_key == "sk-ant-xxxxxxxx" {
+        return Ok("I'm sorry, the AI assistant requires a valid API key. Please set your OpenRouter API key in the config.".to_string());
+    }
+
+    let model = if api_key.starts_with("sk-or-v1") {
+        "openai/gpt-4o-mini"
+    } else {
+        "claude-sonnet-4-20250514"
+    };
+
+    let notes_context = all_notes_json.chars().take(6000).collect::<String>();
+
+    let system_prompt = format!(
+        "You are a helpful meeting notes assistant. You have access to ALL of the user's meeting notes (summaries, action items, participants, tones, and transcripts).
+
+Here are all the user's notes for context:
+{}
+
+When answering questions, draw from any of these notes as relevant. Be concise and helpful. If the answer is not in any of the notes, say so clearly. If multiple notes are relevant, reference them.
+Handle all English varieties naturally — Indian, American, British, etc.
+",
+        notes_context
+    );
+
+    let mut messages = vec![
+        serde_json::json!({
+            "role": "system",
+            "content": [{"type": "text", "text": system_prompt}]
+        })
+    ];
+
+    for msg in history {
+        messages.push(serde_json::json!({
+            "role": msg.role,
+            "content": [{"type": "text", "text": &msg.content}]
+        }));
+    }
+
+    messages.push(serde_json::json!({
+        "role": "user",
+        "content": [{"type": "text", "text": question}]
+    }));
+
+    let client = reqwest::blocking::Client::new();
+    let response = client
+        .post("https://openrouter.ai/api/v1/chat/completions")
+        .header("Authorization", format!("Bearer {}", api_key))
+        .header("Content-Type", "application/json")
+        .header("HTTP-Referer", "https://notemeet.app")
+        .header("X-Title", "NoteMeet")
+        .json(&serde_json::json!({
+            "model": model,
+            "max_tokens": 2048,
+            "temperature": 0.3,
+            "messages": messages
+        }))
+        .send()
+        .map_err(|e| format!("Chat API error: {}", e))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let body_text = response.text().unwrap_or_default();
+        log!("Chat API returned {}: {}", status, &body_text[..500.min(body_text.len())]);
+        return Err(format!("Chat API error ({}): {}", status, &body_text[..200.min(body_text.len())]));
+    }
+
+    let body: serde_json::Value = response
+        .json()
+        .map_err(|e| format!("Chat parse error: {}", e))?;
+
+    let content = body["choices"][0]["message"]["content"]
+        .as_str()
+        .ok_or_else(|| format!("No chat response: {}", body))?;
+
+    Ok(content.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

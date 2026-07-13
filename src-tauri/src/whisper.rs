@@ -64,7 +64,7 @@ pub fn transcribe(audio_data: &[i16], sample_rate: u32) -> Result<String, String
 
     let model_path = std::env::var("WHISPER_MODEL_PATH").unwrap_or_else(|_| {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/sangameshk".to_string());
-        format!("{}/notemeet-app/src-tauri/whisper/models/ggml-tiny.en.bin", home)
+        format!("{}/notemeet-app/src-tauri/whisper/models/ggml-base.bin", home)
     });
     log!("whisper model: {}", model_path);
 
@@ -178,5 +178,19 @@ mod tests {
     fn test_parse_trims_whitespace() {
         let stdout = "[00:00:00.000 --> 00:00:02.000]     Spaced out text.   \n";
         assert_eq!(parse_whisper_stdout(stdout), "Spaced out text.");
+    }
+
+    #[test]
+    fn test_parse_hindi_text() {
+        let stdout = "[00:00:00.000 --> 00:00:03.000]  नमस्ते, आप कैसे हैं?\n[00:00:03.000 --> 00:00:06.000]  मैं ठीक हूँ, धन्यवाद।\n";
+        let result = parse_whisper_stdout(stdout);
+        assert_eq!(result, "नमस्ते, आप कैसे हैं? मैं ठीक हूँ, धन्यवाद।");
+    }
+
+    #[test]
+    fn test_parse_mixed_hindi_english() {
+        let stdout = "[00:00:00.000 --> 00:00:02.000]  Hello, कैसे हो?\n[00:00:02.000 --> 00:00:04.500]  I'm good, और तुम?\n";
+        let result = parse_whisper_stdout(stdout);
+        assert_eq!(result, "Hello, कैसे हो? I'm good, और तुम?");
     }
 }

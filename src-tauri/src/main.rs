@@ -2,6 +2,7 @@ mod audio;
 mod db;
 mod whisper;
 mod llm;
+mod google;
 
 use chrono::Local;
 use serde::{Deserialize, Serialize};
@@ -167,6 +168,59 @@ fn ask_about_note(note_json: String, question: String, history: Vec<llm::ChatMes
 }
 
 #[tauri::command]
+fn ask_all_notes(all_notes_json: String, question: String, history: Vec<llm::ChatMessage>) -> Result<String, String> {
+    llm::chat_all_notes(&all_notes_json, &question, &history)
+}
+
+#[tauri::command]
+fn add_calendar_event(state: State<AppState>, title: String, date: String, time: String, notes: String) -> Result<db::CalendarEvent, String> {
+    let event = db::CalendarEvent {
+        id: uuid::Uuid::new_v4().to_string(),
+        title,
+        date,
+        time,
+        notes,
+    };
+    state.db.add_event(&event)?;
+    Ok(event)
+}
+
+#[tauri::command]
+fn load_calendar_events(state: State<AppState>) -> Result<Vec<db::CalendarEvent>, String> {
+    state.db.load_events()
+}
+
+#[tauri::command]
+fn delete_calendar_event(state: State<AppState>, event_id: String) -> Result<(), String> {
+    state.db.delete_event(&event_id)
+}
+
+#[tauri::command]
+fn google_auth_status() -> Result<serde_json::Value, String> {
+    google::auth_status()
+}
+
+#[tauri::command]
+fn google_sign_in(app_handle: tauri::AppHandle) -> Result<String, String> {
+    google::start_auth_flow(app_handle)
+}
+
+#[tauri::command]
+fn google_sign_out() -> Result<(), String> {
+    google::sign_out()
+}
+
+#[tauri::command]
+fn google_sync_events() -> Result<Vec<google::GoogleEvent>, String> {
+    google::fetch_calendar_events()
+}
+
+#[tauri::command]
+fn google_create_event(title: String, date: String, time: String, notes: String) -> Result<google::GoogleEvent, String> {
+    google::create_calendar_event(&title, &date, &time, &notes)
+}
+
+#[tauri::command]
 fn create_mini_window(app_handle: tauri::AppHandle) -> Result<(), String> {
     use tauri::WindowUrl;
 
@@ -257,7 +311,16 @@ fn main() {
             load_notes,
             read_audio_file,
             ask_about_note,
+            ask_all_notes,
+            add_calendar_event,
+            load_calendar_events,
+            delete_calendar_event,
             create_mini_window,
+            google_auth_status,
+            google_sign_in,
+            google_sign_out,
+            google_sync_events,
+            google_create_event,
         ])
         .on_system_tray_event(|app, event| match event {
             SystemTrayEvent::LeftClick { .. } => {
@@ -280,8 +343,6 @@ fn main() {
                         if let Ok(result) = stop_recording(state, "Quick Note".to_string()) {
                             if let Some(window) = app.get_window("main") {
                                 let _ = window.emit("note-ready", result);
-                                let _ = window.show();
-                                let _ = window.set_focus();
                             }
                         }
                         // Update tray menu text
@@ -300,8 +361,6 @@ fn main() {
                             let _ = item.set_title("Stop Recording");
                         }
                         if let Some(window) = app.get_window("main") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
                             let _ = window.emit("recording-started", ());
                         }
                     }
