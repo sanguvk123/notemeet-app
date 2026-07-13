@@ -7,7 +7,7 @@ import NotesPage from './pages/NotesPage';
 import CalendarPage from './pages/CalendarPage';
 import LoginPage from './pages/LoginPage';
 
-function Layout({ email, onSignOut }) {
+function Layout({ email, isGuest, onSignOut, onSignIn }) {
   return (
     <div className="app">
       <nav className="nav-sidebar">
@@ -43,9 +43,19 @@ function Layout({ email, onSignOut }) {
           </NavLink>
         </div>
         <div className="nav-footer">
-          <div className="nav-user" title={email}>
-            <span className="nav-user-avatar">{email.charAt(0).toUpperCase()}</span>
-          </div>
+          {isGuest ? (
+            <button className="nav-signin-btn" onClick={onSignIn} title="Sign in with Google">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+                <path d="M7 11V7a5 5 0 0110 0v4"/>
+              </svg>
+              <span>Sign In</span>
+            </button>
+          ) : (
+            <div className="nav-user" title={email}>
+              <span className="nav-user-avatar">{email.charAt(0).toUpperCase()}</span>
+            </div>
+          )}
           <button className="mini-launch-btn" onClick={() => invoke('create_mini_window')} title="Open Mini Recorder">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
@@ -53,20 +63,22 @@ function Layout({ email, onSignOut }) {
               <line x1="12" y1="17" x2="12" y2="21"/>
             </svg>
           </button>
-          <button className="nav-signout-btn" onClick={onSignOut} title="Sign out">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/>
-              <polyline points="16 17 21 12 16 7"/>
-              <line x1="21" y1="12" x2="9" y2="12"/>
-            </svg>
-          </button>
+          {!isGuest && (
+            <button className="nav-signout-btn" onClick={onSignOut} title="Sign out">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/>
+                <polyline points="16 17 21 12 16 7"/>
+                <line x1="21" y1="12" x2="9" y2="12"/>
+              </svg>
+            </button>
+          )}
         </div>
       </nav>
       <div className="page-area">
         <Routes>
           <Route path="/home" element={<HomePage />} />
           <Route path="/notes" element={<NotesPage />} />
-          <Route path="/calendar" element={<CalendarPage />} />
+          <Route path="/calendar" element={<CalendarPage isGuest={isGuest} />} />
           <Route path="*" element={<Navigate to="/home" replace />} />
         </Routes>
       </div>
@@ -75,15 +87,15 @@ function Layout({ email, onSignOut }) {
 }
 
 export default function App() {
-  const [auth, setAuth] = useState({ checking: true, signedIn: false, email: '' });
+  const [auth, setAuth] = useState({ checking: true, signedIn: false, guest: false, email: '' });
 
   useEffect(() => {
     (async () => {
       try {
         const status = await invoke('google_auth_status');
-        setAuth({ checking: false, signedIn: status.signedIn, email: status.email || '' });
+        setAuth({ checking: false, signedIn: status.signedIn, guest: false, email: status.email || '' });
       } catch (_) {
-        setAuth({ checking: false, signedIn: false, email: '' });
+        setAuth({ checking: false, signedIn: false, guest: false, email: '' });
       }
     })();
   }, []);
@@ -96,18 +108,19 @@ export default function App() {
     );
   }
 
-  if (!auth.signedIn) {
+  if (!auth.signedIn && !auth.guest) {
     return (
-      <LoginPage onSignedIn={(status) => setAuth({ checking: false, signedIn: true, email: status.email || '' })} />
+      <LoginPage onSignedIn={(status) => setAuth({ checking: false, signedIn: status.signedIn, guest: !!status.guest, email: status.email || '' })} />
     );
   }
 
   return (
     <NoteProvider>
-      <Layout email={auth.email} onSignOut={async () => {
-        try { await invoke('google_sign_out'); } catch (_) {}
-        setAuth({ checking: false, signedIn: false, email: '' });
-      }} />
+      <Layout email={auth.email} isGuest={auth.guest} onSignIn={() => setAuth({ checking: false, signedIn: false, guest: false, email: '' })}
+        onSignOut={async () => {
+          try { await invoke('google_sign_out'); } catch (_) {}
+          setAuth({ checking: false, signedIn: false, guest: false, email: '' });
+        }} />
     </NoteProvider>
   );
 }

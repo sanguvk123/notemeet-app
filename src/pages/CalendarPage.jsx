@@ -19,7 +19,7 @@ function getFirstDayOfMonth(year, month) {
   return new Date(year, month, 1).getDay();
 }
 
-export default function CalendarPage() {
+export default function CalendarPage({ isGuest }) {
   const { notes } = useNotes();
   const [localEvents, setLocalEvents] = useState([]);
   const [googleEvents, setGoogleEvents] = useState([]);
@@ -152,21 +152,27 @@ export default function CalendarPage() {
           <h1>Calendar</h1>
           <div className="calendar-header-actions">
             <div className="google-auth-section">
-              {syncing && <span className="sync-spinner" />}
-              {authStatus.signedIn ? (
-                <div className="google-signed-in">
-                  <span className="google-email" title={authStatus.email}>G</span>
-                  <button className="google-btn" onClick={syncGoogle} disabled={syncing}>
-                    {syncing ? 'Syncing...' : 'Sync'}
-                  </button>
-                  <button className="google-btn google-btn-outline" onClick={signOut}>
-                    Sign Out
-                  </button>
-                </div>
+              {isGuest ? (
+                <span className="guest-badge">Guest</span>
               ) : (
-                <button className="google-btn" onClick={signIn} disabled={syncing}>
-                  {syncing ? 'Connecting...' : 'Sign in with Google'}
-                </button>
+                <>
+                  {syncing && <span className="sync-spinner" />}
+                  {authStatus.signedIn ? (
+                    <div className="google-signed-in">
+                      <span className="google-email" title={authStatus.email}>G</span>
+                      <button className="google-btn" onClick={syncGoogle} disabled={syncing}>
+                        {syncing ? 'Syncing...' : 'Sync'}
+                      </button>
+                      <button className="google-btn google-btn-outline" onClick={signOut}>
+                        Sign Out
+                      </button>
+                    </div>
+                  ) : (
+                    <button className="google-btn" onClick={signIn} disabled={syncing}>
+                      {syncing ? 'Connecting...' : 'Sign in with Google'}
+                    </button>
+                  )}
+                </>
               )}
             </div>
             <button className="calendar-add-btn" onClick={() => setShowForm(!showForm)}>

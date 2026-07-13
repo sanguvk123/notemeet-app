@@ -1,16 +1,21 @@
 use chrono::Local;
+use oauth2::{
+    basic::BasicClient, ureq as oauth2_http, AuthUrl, AuthorizationCode, ClientId,
+    ClientSecret, CsrfToken, PkceCodeChallenge, RedirectUrl, Scope, TokenResponse,
+    TokenUrl,
+};
 use serde::{Deserialize, Serialize};
+use std::io::{Read, Write};
+use std::net::TcpListener;
 use std::path::PathBuf;
-use std::sync::mpsc;
 use std::time::Duration;
+use url::form_urlencoded;
 
 macro_rules! log { ($($t:tt)*) => { eprintln!("[NoteMeet {}] {}", Local::now().format("%H:%M:%S%.3f"), format!($($t)*)) } }
 
 const SCOPES: &str = "https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/userinfo.email";
-const AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const CALENDAR_API: &str = "https://www.googleapis.com/calendar/v3/calendars/primary/events";
-const REDIRECT_URI: &str = "http://localhost/oauth/callback";
 
 fn client_id() -> Result<&'static str, String> {
     option_env!("GOOGLE_CLIENT_ID").ok_or_else(|| {
@@ -40,7 +45,8 @@ pub struct GoogleTokens {
 
 fn load_tokens() -> Option<GoogleTokens> {
     let path = tokens_path();
-    std::fs::read_to_string(&path).ok()
+    std::fs::read_to_string(&path)
+        .ok()
         .and_then(|c| serde_json::from_str(&c).ok())
 }
 
@@ -60,40 +66,150 @@ pub fn is_signed_in() -> bool {
     load_tokens().is_some()
 }
 
-fn exchange_code(code: &str) -> Result<GoogleTokens, String> {
+pub fn start_auth_flow(_app_handle: tauri::AppHandle) -> Result<String, String> {
     let cid = client_id()?;
     let cs = client_secret()?;
 
-    let client = reqwest::blocking::Client::new();
-    let resp = client
-        .post(TOKEN_URL)
-        .form(&[
-            ("code", code),
-            ("client_id", cid),
-            ("client_secret", cs),
-            ("redirect_uri", REDIRECT_URI),
-            ("grant_type", "authorization_code"),
-        ])
-        .send()
-        .map_err(|e| format!("Token exchange error: {}", e))?;
+    let client = BasicClient::new(
+        ClientId::new(cid.to_string()),
+        Some(ClientSecret::new(cs.to_string())),
+        AuthUrl::new("https://accounts.google.com/o/oauth2/v2/auth".to_string())
+            .map_err(|e| format!("Bad auth URL: {}", e))?,
+        Some(
+            TokenUrl::new(TOKEN_URL.to_string())
+                .map_err(|e| format!("Bad token URL: {}", e))?,
+        ),
+    );
 
-    if !resp.status().is_success() {
-        let body = resp.text().unwrap_or_default();
-        return Err(format!("Token exchange failed: {}", body));
+    let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
+
+    let listener =
+        TcpListener::bind("127.0.0.1:0").map_err(|e| format!("Local server: {}", e))?;
+    let port = listener
+        .local_addr()
+        .map_err(|e| format!("Local addr: {}", e))?
+        .port();
+    let redirect_uri_str = format!("http://127.0.0.1:{}", port);
+
+    let redirect_uri = RedirectUrl::new(redirect_uri_str.clone())
+        .map_err(|e| format!("Bad redirect URI: {}", e))?;
+
+    let client = client.set_redirect_uri(redirect_uri);
+
+    let (auth_url, csrf_state) = client
+        .authorize_url(CsrfToken::new_random)
+        .add_scope(Scope::new(
+            "https://www.googleapis.com/auth/calendar.readonly".to_string(),
+        ))
+        .add_scope(Scope::new(
+            "https://www.googleapis.com/auth/calendar.events".to_string(),
+        ))
+        .add_scope(Scope::new(
+            "https://www.googleapis.com/auth/userinfo.email".to_string(),
+        ))
+        .add_extra_param("access_type", "offline")
+        .set_pkce_challenge(pkce_challenge)
+        .url();
+
+    log!(
+        "Opening browser for Google sign-in, local server on port {}",
+        port
+    );
+    webbrowser::open(auth_url.as_str()).map_err(|e| format!("Open browser: {}", e))?;
+
+    listener
+        .set_nonblocking(true)
+        .map_err(|e| format!("Set nonblocking: {}", e))?;
+    let start = std::time::Instant::now();
+    let timeout = Duration::from_secs(180);
+    let mut stream = None;
+    while start.elapsed() < timeout {
+        match listener.accept() {
+            Ok((s, _addr)) => {
+                stream = Some(s);
+                break;
+            }
+            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(Duration::from_millis(200));
+                continue;
+            }
+            Err(e) => return Err(format!("Accept error: {}", e)),
+        }
+    }
+    let mut stream = stream.ok_or("Authentication timed out after 180s")?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .ok();
+
+    let mut buf = [0u8; 4096];
+    let n = stream.read(&mut buf).map_err(|e| format!("Read: {}", e))?;
+    let request = String::from_utf8_lossy(&buf[..n]);
+
+    log!("HTTP: {}", request.lines().next().unwrap_or(""));
+
+    let (code, returned_state) = parse_redirect(&request)?;
+
+    if returned_state != *csrf_state.secret() {
+        return Err("Security error: state mismatch — possible CSRF attack".into());
     }
 
-    let data: serde_json::Value = resp.json().map_err(|e| format!("Parse error: {}", e))?;
+    let response = b"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: 94\r\n\r\n<html><body><p>Signed in! You can close this window.</p><script>window.close()</script></body></html>\r\n";
+    let _ = stream.write_all(response);
 
-    let expires_in = data["expires_in"].as_f64().unwrap_or(3600.0);
-    let expiry = chrono::Utc::now().timestamp() as f64 + expires_in;
+    let token_result = client
+        .exchange_code(AuthorizationCode::new(code))
+        .set_pkce_verifier(pkce_verifier)
+        .request(oauth2_http::http_client)
+        .map_err(|e| format!("Token exchange: {}", e))?;
 
-    Ok(GoogleTokens {
-        access_token: data["access_token"].as_str().unwrap_or("").to_string(),
-        refresh_token: data["refresh_token"].as_str().unwrap_or("").to_string(),
-        expiry,
-        scope: data["scope"].as_str().unwrap_or("").to_string(),
-        token_type: data["token_type"].as_str().unwrap_or("Bearer").to_string(),
-    })
+    let tokens = GoogleTokens {
+        access_token: token_result.access_token().secret().clone(),
+        refresh_token: token_result
+            .refresh_token()
+            .map(|t| t.secret().clone())
+            .unwrap_or_default(),
+        expiry: chrono::Utc::now().timestamp() as f64
+            + token_result
+                .expires_in()
+                .map(|d| d.as_secs_f64())
+                .unwrap_or(3600.0),
+        scope: SCOPES.to_string(),
+        token_type: "Bearer".to_string(),
+    };
+
+    save_tokens(&tokens);
+    log!("OAuth complete, tokens saved");
+    Ok("signed_in".into())
+}
+
+fn parse_redirect(request: &str) -> Result<(String, String), String> {
+    let first_line = request.lines().next().ok_or("Empty HTTP request")?;
+    let path = first_line
+        .split_whitespace()
+        .nth(1)
+        .ok_or("No path in request")?;
+
+    let query_str = path
+        .split('?')
+        .nth(1)
+        .ok_or("No query string in request")?;
+
+    let mut code: Option<String> = None;
+    let mut state: Option<String> = None;
+
+    for (key, value) in form_urlencoded::parse(query_str.as_bytes()) {
+        match key.as_ref() {
+            "code" => code = Some(value.into_owned()),
+            "state" => state = Some(value.into_owned()),
+            "error" => return Err(format!("Google returned error: {}", value)),
+            _ => {}
+        }
+    }
+
+    Ok((
+        code.ok_or("No authorization code in redirect")?,
+        state.ok_or("No state parameter in redirect")?,
+    ))
 }
 
 fn refresh_access_token(tokens: &GoogleTokens) -> Result<GoogleTokens, String> {
@@ -139,67 +255,6 @@ fn get_valid_token() -> Result<String, String> {
         Ok(refreshed.access_token)
     } else {
         Ok(tokens.access_token)
-    }
-}
-
-pub fn start_auth_flow(app_handle: tauri::AppHandle) -> Result<String, String> {
-    let cid = client_id()?;
-    let _cs = client_secret()?;
-
-    let auth_url = format!(
-        "{}?client_id={}&redirect_uri={}&response_type=code&scope={}&access_type=offline&prompt=consent",
-        AUTH_URL,
-        cid,
-        REDIRECT_URI,
-        SCOPES.replace(' ', "%20")
-    );
-
-    let (tx, rx) = mpsc::channel::<String>();
-    let parsed_url = url::Url::parse(&auth_url).map_err(|e| format!("Bad URL: {}", e))?;
-
-    let window = tauri::WindowBuilder::new(
-        &app_handle,
-        "google-auth",
-        tauri::WindowUrl::External(parsed_url),
-    )
-    .title("Sign in with Google")
-    .inner_size(520.0, 680.0)
-    .resizable(false)
-    .center()
-    .on_navigation(move |url| {
-        let url_str = url.as_str();
-        if url_str.starts_with(REDIRECT_URI) {
-            if let Some(idx) = url_str.find("code=") {
-                let after = &url_str[idx + 5..];
-                let code = if let Some(amp) = after.find('&') {
-                    after[..amp].to_string()
-                } else {
-                    after.to_string()
-                };
-                let _ = tx.send(code);
-            }
-            return false;
-        }
-        true
-    })
-    .build()
-    .map_err(|e| format!("Auth window error: {}", e))?;
-
-    match rx.recv_timeout(Duration::from_secs(180)) {
-        Ok(code) => {
-            let _ = window.close();
-            let tokens = exchange_code(&code)?;
-            save_tokens(&tokens);
-            log!("OAuth complete, tokens saved");
-            Ok("signed_in".into())
-        }
-        Err(mpsc::RecvTimeoutError::Timeout) => {
-            let _ = window.close();
-            Err("Authentication timed out after 3 minutes".into())
-        }
-        Err(mpsc::RecvTimeoutError::Disconnected) => {
-            Err("Authentication cancelled".into())
-        }
     }
 }
 
@@ -253,28 +308,47 @@ pub fn fetch_calendar_events() -> Result<Vec<GoogleEvent>, String> {
 
     let data: CalendarApiResponse = resp.json().map_err(|e| format!("Parse error: {}", e))?;
 
-    let events = data.items.unwrap_or_default().into_iter().filter_map(|item| {
-        let id = item.id.unwrap_or_default();
-        let title = item.summary.unwrap_or_else(|| "Untitled Event".to_string());
-        let (date, time) = if let Some(start) = item.start {
-            if let Some(dt) = start.date_time {
-                let parsed = chrono::DateTime::parse_from_rfc3339(&dt).ok()?;
-                (parsed.format("%Y-%m-%d").to_string(), parsed.format("%H:%M").to_string())
-            } else if let Some(d) = start.date {
-                (d, String::new())
+    let events = data
+        .items
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|item| {
+            let id = item.id.unwrap_or_default();
+            let title = item.summary.unwrap_or_else(|| "Untitled Event".to_string());
+            let (date, time) = if let Some(start) = item.start {
+                if let Some(dt) = start.date_time {
+                    let parsed = chrono::DateTime::parse_from_rfc3339(&dt).ok()?;
+                    (
+                        parsed.format("%Y-%m-%d").to_string(),
+                        parsed.format("%H:%M").to_string(),
+                    )
+                } else if let Some(d) = start.date {
+                    (d, String::new())
+                } else {
+                    return None;
+                }
             } else {
                 return None;
-            }
-        } else {
-            return None;
-        };
-        Some(GoogleEvent { id, title, date, time, source: "google".into() })
-    }).collect();
+            };
+            Some(GoogleEvent {
+                id,
+                title,
+                date,
+                time,
+                source: "google".into(),
+            })
+        })
+        .collect();
 
     Ok(events)
 }
 
-pub fn create_calendar_event(title: &str, date: &str, time: &str, notes: &str) -> Result<GoogleEvent, String> {
+pub fn create_calendar_event(
+    title: &str,
+    date: &str,
+    time: &str,
+    notes: &str,
+) -> Result<GoogleEvent, String> {
     let token = get_valid_token()?;
 
     let start_dt = if time.is_empty() {
@@ -284,10 +358,12 @@ pub fn create_calendar_event(title: &str, date: &str, time: &str, notes: &str) -
     };
 
     let end_dt = if time.is_empty() {
-        let next = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").map_err(|_| "Bad date".to_string())?;
+        let next = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d")
+            .map_err(|_| "Bad date".to_string())?;
         format!("{}", next + chrono::Duration::days(1))
     } else {
-        let start_parsed = chrono::NaiveTime::parse_from_str(time, "%H:%M").map_err(|_| "Bad time".to_string())?;
+        let start_parsed = chrono::NaiveTime::parse_from_str(time, "%H:%M")
+            .map_err(|_| "Bad time".to_string())?;
         let end_parsed = start_parsed + chrono::Duration::hours(1);
         format!("{}T{}:00", date, end_parsed.format("%H:%M"))
     };

@@ -12,7 +12,7 @@ export default function LoginPage({ onSignedIn }) {
       await invoke('google_sign_in');
       const status = await invoke('google_auth_status');
       if (status.signedIn) {
-        onSignedIn(status);
+        onSignedIn({ ...status, guest: false });
       } else {
         setError('Sign-in completed but no tokens found. Please try again.');
       }
@@ -49,8 +49,20 @@ export default function LoginPage({ onSignedIn }) {
           )}
         </button>
 
+        <div className="login-divider">
+          <span>or</span>
+        </div>
+
+        <button className="login-guest-btn" onClick={() => onSignedIn({ signedIn: false, email: '', guest: true })}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/>
+            <circle cx="12" cy="7" r="4"/>
+          </svg>
+          Continue as Guest
+        </button>
+
         <p className="login-footer">
-          Sign in with your Google account to access your meeting notes, AI assistant, and calendar.
+          Guest mode: your notes stay local on this device. Sign in with Google for calendar sync and cloud features.
         </p>
       </div>
     </div>
