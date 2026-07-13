@@ -2,6 +2,7 @@ mod audio;
 mod db;
 mod whisper;
 mod llm;
+mod google;
 
 use chrono::Local;
 use serde::{Deserialize, Serialize};
@@ -194,6 +195,48 @@ fn delete_calendar_event(state: State<AppState>, event_id: String) -> Result<(),
     state.db.delete_event(&event_id)
 }
 
+fn get_google_creds() -> (String, String) {
+    let config = google::load_config();
+    let client_id = config.get("googleClientId").cloned().unwrap_or_default();
+    let client_secret = config.get("googleClientSecret").cloned().unwrap_or_default();
+    if !client_id.is_empty() && !client_secret.is_empty() {
+        return (client_id, client_secret);
+    }
+    (
+        std::env::var("GOOGLE_CLIENT_ID").unwrap_or_default(),
+        std::env::var("GOOGLE_CLIENT_SECRET").unwrap_or_default(),
+    )
+}
+
+#[tauri::command]
+fn google_auth_status() -> Result<serde_json::Value, String> {
+    let (cid, cs) = get_google_creds();
+    google::auth_status(&cid, &cs)
+}
+
+#[tauri::command]
+fn google_sign_in() -> Result<String, String> {
+    let (cid, cs) = get_google_creds();
+    google::start_auth_flow(&cid, &cs)
+}
+
+#[tauri::command]
+fn google_sign_out() -> Result<(), String> {
+    google::sign_out()
+}
+
+#[tauri::command]
+fn google_sync_events() -> Result<Vec<google::GoogleEvent>, String> {
+    let (cid, cs) = get_google_creds();
+    google::fetch_calendar_events(&cid, &cs)
+}
+
+#[tauri::command]
+fn google_create_event(title: String, date: String, time: String, notes: String) -> Result<google::GoogleEvent, String> {
+    let (cid, cs) = get_google_creds();
+    google::create_calendar_event(&cid, &cs, &title, &date, &time, &notes)
+}
+
 #[tauri::command]
 fn create_mini_window(app_handle: tauri::AppHandle) -> Result<(), String> {
     use tauri::WindowUrl;
@@ -290,6 +333,11 @@ fn main() {
             load_calendar_events,
             delete_calendar_event,
             create_mini_window,
+            google_auth_status,
+            google_sign_in,
+            google_sign_out,
+            google_sync_events,
+            google_create_event,
         ])
         .on_system_tray_event(|app, event| match event {
             SystemTrayEvent::LeftClick { .. } => {

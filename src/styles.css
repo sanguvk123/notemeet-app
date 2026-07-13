@@ -1181,8 +1181,6 @@ body {
   height: 5px;
   border-radius: 50%;
   background: var(--accent);
-  position: absolute;
-  bottom: 4px;
 }
 
 .cal-event-dot {
@@ -1190,10 +1188,6 @@ body {
   height: 5px;
   border-radius: 50%;
   background: var(--blue);
-  position: absolute;
-  bottom: 4px;
-  left: 50%;
-  transform: translateX(8px);
 }
 
 .cal-day.has-note .cal-day-num {
@@ -1282,4 +1276,127 @@ body {
   font-size: 13px;
   color: var(--text3);
   padding: 20px;
+}
+
+/* Google Auth */
+.calendar-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.google-auth-section {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sync-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+.google-btn {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  color: var(--text2);
+  padding: 7px 14px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+
+.google-btn:hover {
+  background: var(--surface3);
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.google-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.google-btn-outline {
+  background: none;
+  color: var(--text3);
+  border-color: var(--border);
+}
+
+.google-btn-outline:hover {
+  color: var(--red);
+  border-color: var(--red);
+  background: none;
+}
+
+.google-signed-in {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.google-email {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #4285f4, #34a853);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.cal-day-dots {
+  display: flex;
+  gap: 2px;
+  align-items: center;
+  justify-content: center;
+  height: 8px;
+}
+
+.cal-google-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #4285f4;
+}
+
+.cal-source-badge {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #4285f4, #34a853);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-right: 6px;
+}
+
+.cal-google-item {
+  border-left: 3px solid #4285f4 !important;
+}
+
+.cal-note-item {
+  border-left: 3px solid var(--accent) !important;
+}
+
+.cal-detail-item-title {
+  display: flex;
+  align-items: center;
 }
