@@ -2148,7 +2148,6 @@ dependencies = [
 name = "notemeet"
 version = "0.1.0"
 dependencies = [
- "base64 0.21.7",
  "chrono",
  "cpal",
  "hound",
@@ -2160,6 +2159,7 @@ dependencies = [
  "tauri-build",
  "tempfile",
  "tokio",
+ "url",
  "uuid",
 ]
 

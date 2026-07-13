@@ -215,9 +215,9 @@ fn google_auth_status() -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
-fn google_sign_in() -> Result<String, String> {
+fn google_sign_in(app_handle: tauri::AppHandle) -> Result<String, String> {
     let (cid, cs) = get_google_creds();
-    google::start_auth_flow(&cid, &cs)
+    google::start_auth_flow(app_handle, &cid, &cs)
 }
 
 #[tauri::command]

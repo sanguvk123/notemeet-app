@@ -1,10 +1,8 @@
 use chrono::Local;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
-use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::mpsc;
 use std::time::Duration;
 
 macro_rules! log { ($($t:tt)*) => { eprintln!("[NoteMeet {}] {}", Local::now().format("%H:%M:%S%.3f"), format!($($t)*)) } }
@@ -13,6 +11,7 @@ const SCOPES: &str = "https://www.googleapis.com/auth/calendar.readonly https://
 const AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const CALENDAR_API: &str = "https://www.googleapis.com/calendar/v3/calendars/primary/events";
+const REDIRECT_URI: &str = "http://localhost/oauth/callback";
 
 fn tokens_path() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
@@ -63,7 +62,7 @@ pub fn is_signed_in() -> bool {
     load_tokens().is_some()
 }
 
-fn exchange_code(code: &str, client_id: &str, client_secret: &str, redirect_uri: &str) -> Result<GoogleTokens, String> {
+fn exchange_code(code: &str, client_id: &str, client_secret: &str) -> Result<GoogleTokens, String> {
     let client = reqwest::blocking::Client::new();
     let resp = client
         .post(TOKEN_URL)
@@ -71,7 +70,7 @@ fn exchange_code(code: &str, client_id: &str, client_secret: &str, redirect_uri:
             ("code", code),
             ("client_id", client_id),
             ("client_secret", client_secret),
-            ("redirect_uri", redirect_uri),
+            ("redirect_uri", REDIRECT_URI),
             ("grant_type", "authorization_code"),
         ])
         .send()
@@ -139,114 +138,64 @@ fn get_valid_token(client_id: &str, client_secret: &str) -> Result<String, Strin
     }
 }
 
-fn handle_callback(mut stream: TcpStream, code: &mut Option<String>) {
-    let mut reader = BufReader::new(&stream);
-    let mut request_line = String::new();
-    if reader.read_line(&mut request_line).is_err() {
-        return;
-    }
-
-    if let Some(path) = request_line.split_whitespace().nth(1) {
-        if let Some(idx) = path.find("code=") {
-            let after_code = &path[idx + 5..];
-            *code = Some(if let Some(amp) = after_code.find('&') {
-                after_code[..amp].to_string()
-            } else {
-                after_code.to_string()
-            });
-        }
-    }
-
-    let response = "<html><body><h1>Authentication complete!</h1><p>You can close this window and return to NoteMeet.</p></body></html>";
-    let http_response = format!(
-        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/html\r\n\r\n{}",
-        response.len(),
-        response
-    );
-    let _ = stream.write_all(http_response.as_bytes());
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct GoogleEvent {
-    pub id: String,
-    pub title: String,
-    pub date: String,
-    pub time: String,
-    pub source: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct CalendarApiResponse {
-    items: Option<Vec<CalendarItem>>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct CalendarItem {
-    id: Option<String>,
-    summary: Option<String>,
-    start: Option<CalendarDateTime>,
-    end: Option<CalendarDateTime>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct CalendarDateTime {
-    date_time: Option<String>,
-    date: Option<String>,
-}
-
-pub fn start_auth_flow(client_id: &str, client_secret: &str) -> Result<String, String> {
+pub fn start_auth_flow(app_handle: tauri::AppHandle, client_id: &str, client_secret: &str) -> Result<String, String> {
     if client_id.is_empty() || client_secret.is_empty() {
         return Err("Google Client ID and Client Secret must be configured in config.json (googleClientId, googleClientSecret)".into());
     }
-
-    let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| format!("Failed to start local server: {}", e))?;
-    let port = listener.local_addr().map_err(|e| format!("Failed to get port: {}", e))?.port();
-    let redirect_uri = format!("http://127.0.0.1:{}/callback", port);
 
     let auth_url = format!(
         "{}?client_id={}&redirect_uri={}&response_type=code&scope={}&access_type=offline&prompt=consent",
         AUTH_URL,
         client_id,
-        redirect_uri,
+        REDIRECT_URI,
         SCOPES.replace(' ', "%20")
     );
 
-    // Open browser to Google auth URL
-    let _ = std::process::Command::new("open").arg(&auth_url).spawn();
-    log!("Opened browser for Google auth, waiting on port {}...", port);
+    let (tx, rx) = mpsc::channel::<String>();
+    let parsed_url = url::Url::parse(&auth_url).map_err(|e| format!("Bad URL: {}", e))?;
 
-    let code: Mutex<Option<String>> = Mutex::new(None);
-    let code_ref = &code;
-
-    listener.set_nonblocking(true).ok();
-    let start = std::time::Instant::now();
-
-    loop {
-        if start.elapsed() > Duration::from_secs(120) {
-            return Err("Authentication timed out after 2 minutes".into());
+    let window = tauri::WindowBuilder::new(
+        &app_handle,
+        "google-auth",
+        tauri::WindowUrl::External(parsed_url),
+    )
+    .title("Sign in with Google")
+    .inner_size(520.0, 680.0)
+    .resizable(false)
+    .center()
+    .on_navigation(move |url| {
+        let url_str = url.as_str();
+        if url_str.starts_with(REDIRECT_URI) {
+            if let Some(idx) = url_str.find("code=") {
+                let after = &url_str[idx + 5..];
+                let code = if let Some(amp) = after.find('&') {
+                    after[..amp].to_string()
+                } else {
+                    after.to_string()
+                };
+                let _ = tx.send(code);
+            }
+            return false;
         }
+        true
+    })
+    .build()
+    .map_err(|e| format!("Auth window error: {}", e))?;
 
-        match listener.accept() {
-            Ok((stream, _)) => {
-                let mut code_opt = code_ref.lock().unwrap();
-                handle_callback(stream, &mut code_opt);
-                if code_opt.is_some() {
-                    let auth_code = code_opt.take().unwrap();
-                    let tokens = exchange_code(&auth_code, client_id, client_secret, &redirect_uri)?;
-                    save_tokens(&tokens);
-                    log!("OAuth complete, tokens saved");
-                    return Ok("signed_in".into());
-                }
-            }
-            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                std::thread::sleep(Duration::from_millis(100));
-                continue;
-            }
-            Err(_) => {
-                std::thread::sleep(Duration::from_millis(100));
-                continue;
-            }
+    match rx.recv_timeout(Duration::from_secs(180)) {
+        Ok(code) => {
+            let _ = window.close();
+            let tokens = exchange_code(&code, client_id, client_secret)?;
+            save_tokens(&tokens);
+            log!("OAuth complete, tokens saved");
+            Ok("signed_in".into())
+        }
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            let _ = window.close();
+            Err("Authentication timed out after 3 minutes".into())
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            Err("Authentication cancelled".into())
         }
     }
 }
@@ -281,6 +230,24 @@ pub fn fetch_calendar_events(client_id: &str, client_secret: &str) -> Result<Vec
         return Err(format!("Calendar API error: {}", body));
     }
 
+    #[derive(Debug, Deserialize)]
+    struct CalendarApiResponse {
+        items: Option<Vec<CalendarItem>>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct CalendarItem {
+        id: Option<String>,
+        summary: Option<String>,
+        start: Option<CalendarDateTime>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct CalendarDateTime {
+        date_time: Option<String>,
+        date: Option<String>,
+    }
+
     let data: CalendarApiResponse = resp.json().map_err(|e| format!("Parse error: {}", e))?;
 
     let events = data.items.unwrap_or_default().into_iter().filter_map(|item| {
@@ -300,13 +267,7 @@ pub fn fetch_calendar_events(client_id: &str, client_secret: &str) -> Result<Vec
             return None;
         };
 
-        Some(GoogleEvent {
-            id,
-            title,
-            date,
-            time,
-            source: "google".into(),
-        })
+        Some(GoogleEvent { id, title, date, time, source: "google".into() })
     }).collect();
 
     Ok(events)
@@ -318,14 +279,13 @@ pub fn create_calendar_event(client_id: &str, client_secret: &str, title: &str, 
     let start_dt = if time.is_empty() {
         format!("{}", date)
     } else {
-        format!("T{}:00", time)
+        format!("{}T{}:00", date, time)
     };
 
     let end_dt = if time.is_empty() {
         let next = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").map_err(|_| "Bad date".to_string())?;
         format!("{}", next + chrono::Duration::days(1))
     } else {
-        // Add 1 hour to start time
         let start_parsed = chrono::NaiveTime::parse_from_str(time, "%H:%M").map_err(|_| "Bad time".to_string())?;
         let end_parsed = start_parsed + chrono::Duration::hours(1);
         format!("{}T{}:00", date, end_parsed.format("%H:%M"))
@@ -365,6 +325,16 @@ pub fn create_calendar_event(client_id: &str, client_secret: &str, title: &str, 
     })
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct GoogleEvent {
+    pub id: String,
+    pub title: String,
+    pub date: String,
+    pub time: String,
+    pub source: String,
+}
+
 pub fn auth_status(client_id: &str, client_secret: &str) -> Result<serde_json::Value, String> {
     let signed_in = is_signed_in();
     let mut expires_at: f64 = 0.0;
@@ -372,7 +342,6 @@ pub fn auth_status(client_id: &str, client_secret: &str) -> Result<serde_json::V
 
     if signed_in {
         if let Ok(token) = get_valid_token(client_id, client_secret) {
-            // Fetch user email from Google UserInfo API
             let client = reqwest::blocking::Client::new();
             if let Ok(resp) = client
                 .get("https://www.googleapis.com/oauth2/v2/userinfo")
