@@ -35,7 +35,7 @@ export default function ChatPanel({ note, onClose }) {
     <div className="chat-panel">
       <div className="chat-header">
         <h3>Ask about this note</h3>
-        <button className="chat-close" onClick={onClose}>✕</button>
+        <button className="chat-close" onClick={onClose}>&times;</button>
       </div>
       <div className="chat-messages" ref={chatRef}>
         {messages.length === 0 && (

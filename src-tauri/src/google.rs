@@ -1,6 +1,5 @@
 use chrono::Local;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::Duration;
@@ -13,22 +12,21 @@ const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const CALENDAR_API: &str = "https://www.googleapis.com/calendar/v3/calendars/primary/events";
 const REDIRECT_URI: &str = "http://localhost/oauth/callback";
 
+fn client_id() -> Result<&'static str, String> {
+    option_env!("GOOGLE_CLIENT_ID").ok_or_else(|| {
+        "GOOGLE_CLIENT_ID not set. Set it at build time: GOOGLE_CLIENT_ID=... cargo build".into()
+    })
+}
+
+fn client_secret() -> Result<&'static str, String> {
+    option_env!("GOOGLE_CLIENT_SECRET").ok_or_else(|| {
+        "GOOGLE_CLIENT_SECRET not set. Set it at build time: GOOGLE_CLIENT_SECRET=... cargo build".into()
+    })
+}
+
 fn tokens_path() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
     PathBuf::from(home).join("NoteMeet").join("tokens.json")
-}
-
-fn config_path() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    PathBuf::from(home).join("NoteMeet").join("config.json")
-}
-
-pub fn load_config() -> HashMap<String, String> {
-    let path = config_path();
-    std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|c| serde_json::from_str(&c).ok())
-        .unwrap_or_default()
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -62,14 +60,17 @@ pub fn is_signed_in() -> bool {
     load_tokens().is_some()
 }
 
-fn exchange_code(code: &str, client_id: &str, client_secret: &str) -> Result<GoogleTokens, String> {
+fn exchange_code(code: &str) -> Result<GoogleTokens, String> {
+    let cid = client_id()?;
+    let cs = client_secret()?;
+
     let client = reqwest::blocking::Client::new();
     let resp = client
         .post(TOKEN_URL)
         .form(&[
             ("code", code),
-            ("client_id", client_id),
-            ("client_secret", client_secret),
+            ("client_id", cid),
+            ("client_secret", cs),
             ("redirect_uri", REDIRECT_URI),
             ("grant_type", "authorization_code"),
         ])
@@ -95,14 +96,17 @@ fn exchange_code(code: &str, client_id: &str, client_secret: &str) -> Result<Goo
     })
 }
 
-fn refresh_access_token(tokens: &GoogleTokens, client_id: &str, client_secret: &str) -> Result<GoogleTokens, String> {
+fn refresh_access_token(tokens: &GoogleTokens) -> Result<GoogleTokens, String> {
+    let cid = client_id()?;
+    let cs = client_secret()?;
+
     let client = reqwest::blocking::Client::new();
     let resp = client
         .post(TOKEN_URL)
         .form(&[
             ("refresh_token", tokens.refresh_token.as_str()),
-            ("client_id", client_id),
-            ("client_secret", client_secret),
+            ("client_id", cid),
+            ("client_secret", cs),
             ("grant_type", "refresh_token"),
         ])
         .send()
@@ -126,27 +130,26 @@ fn refresh_access_token(tokens: &GoogleTokens, client_id: &str, client_secret: &
     Ok(updated)
 }
 
-fn get_valid_token(client_id: &str, client_secret: &str) -> Result<String, String> {
+fn get_valid_token() -> Result<String, String> {
     let tokens = load_tokens().ok_or("Not signed in")?;
 
     let now = chrono::Utc::now().timestamp() as f64;
     if now >= tokens.expiry - 60.0 {
-        let refreshed = refresh_access_token(&tokens, client_id, client_secret)?;
+        let refreshed = refresh_access_token(&tokens)?;
         Ok(refreshed.access_token)
     } else {
         Ok(tokens.access_token)
     }
 }
 
-pub fn start_auth_flow(app_handle: tauri::AppHandle, client_id: &str, client_secret: &str) -> Result<String, String> {
-    if client_id.is_empty() || client_secret.is_empty() {
-        return Err("Google Client ID and Client Secret must be configured in config.json (googleClientId, googleClientSecret)".into());
-    }
+pub fn start_auth_flow(app_handle: tauri::AppHandle) -> Result<String, String> {
+    let cid = client_id()?;
+    let cs = client_secret()?;
 
     let auth_url = format!(
         "{}?client_id={}&redirect_uri={}&response_type=code&scope={}&access_type=offline&prompt=consent",
         AUTH_URL,
-        client_id,
+        cid,
         REDIRECT_URI,
         SCOPES.replace(' ', "%20")
     );
@@ -185,7 +188,7 @@ pub fn start_auth_flow(app_handle: tauri::AppHandle, client_id: &str, client_sec
     match rx.recv_timeout(Duration::from_secs(180)) {
         Ok(code) => {
             let _ = window.close();
-            let tokens = exchange_code(&code, client_id, client_secret)?;
+            let tokens = exchange_code(&code)?;
             save_tokens(&tokens);
             log!("OAuth complete, tokens saved");
             Ok("signed_in".into())
@@ -205,8 +208,8 @@ pub fn sign_out() -> Result<(), String> {
     Ok(())
 }
 
-pub fn fetch_calendar_events(client_id: &str, client_secret: &str) -> Result<Vec<GoogleEvent>, String> {
-    let token = get_valid_token(client_id, client_secret)?;
+pub fn fetch_calendar_events() -> Result<Vec<GoogleEvent>, String> {
+    let token = get_valid_token()?;
 
     let now = chrono::Utc::now();
     let time_min = now - chrono::Duration::days(30);
@@ -253,7 +256,6 @@ pub fn fetch_calendar_events(client_id: &str, client_secret: &str) -> Result<Vec
     let events = data.items.unwrap_or_default().into_iter().filter_map(|item| {
         let id = item.id.unwrap_or_default();
         let title = item.summary.unwrap_or_else(|| "Untitled Event".to_string());
-
         let (date, time) = if let Some(start) = item.start {
             if let Some(dt) = start.date_time {
                 let parsed = chrono::DateTime::parse_from_rfc3339(&dt).ok()?;
@@ -266,15 +268,14 @@ pub fn fetch_calendar_events(client_id: &str, client_secret: &str) -> Result<Vec
         } else {
             return None;
         };
-
         Some(GoogleEvent { id, title, date, time, source: "google".into() })
     }).collect();
 
     Ok(events)
 }
 
-pub fn create_calendar_event(client_id: &str, client_secret: &str, title: &str, date: &str, time: &str, notes: &str) -> Result<GoogleEvent, String> {
-    let token = get_valid_token(client_id, client_secret)?;
+pub fn create_calendar_event(title: &str, date: &str, time: &str, notes: &str) -> Result<GoogleEvent, String> {
+    let token = get_valid_token()?;
 
     let start_dt = if time.is_empty() {
         format!("{}", date)
@@ -335,13 +336,13 @@ pub struct GoogleEvent {
     pub source: String,
 }
 
-pub fn auth_status(client_id: &str, client_secret: &str) -> Result<serde_json::Value, String> {
+pub fn auth_status() -> Result<serde_json::Value, String> {
     let signed_in = is_signed_in();
     let mut expires_at: f64 = 0.0;
     let mut email: String = String::new();
 
     if signed_in {
-        if let Ok(token) = get_valid_token(client_id, client_secret) {
+        if let Ok(token) = get_valid_token() {
             let client = reqwest::blocking::Client::new();
             if let Ok(resp) = client
                 .get("https://www.googleapis.com/oauth2/v2/userinfo")

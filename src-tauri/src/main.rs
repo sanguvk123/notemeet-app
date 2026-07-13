@@ -195,29 +195,14 @@ fn delete_calendar_event(state: State<AppState>, event_id: String) -> Result<(),
     state.db.delete_event(&event_id)
 }
 
-fn get_google_creds() -> (String, String) {
-    let config = google::load_config();
-    let client_id = config.get("googleClientId").cloned().unwrap_or_default();
-    let client_secret = config.get("googleClientSecret").cloned().unwrap_or_default();
-    if !client_id.is_empty() && !client_secret.is_empty() {
-        return (client_id, client_secret);
-    }
-    (
-        std::env::var("GOOGLE_CLIENT_ID").unwrap_or_default(),
-        std::env::var("GOOGLE_CLIENT_SECRET").unwrap_or_default(),
-    )
-}
-
 #[tauri::command]
 fn google_auth_status() -> Result<serde_json::Value, String> {
-    let (cid, cs) = get_google_creds();
-    google::auth_status(&cid, &cs)
+    google::auth_status()
 }
 
 #[tauri::command]
 fn google_sign_in(app_handle: tauri::AppHandle) -> Result<String, String> {
-    let (cid, cs) = get_google_creds();
-    google::start_auth_flow(app_handle, &cid, &cs)
+    google::start_auth_flow(app_handle)
 }
 
 #[tauri::command]
@@ -227,14 +212,12 @@ fn google_sign_out() -> Result<(), String> {
 
 #[tauri::command]
 fn google_sync_events() -> Result<Vec<google::GoogleEvent>, String> {
-    let (cid, cs) = get_google_creds();
-    google::fetch_calendar_events(&cid, &cs)
+    google::fetch_calendar_events()
 }
 
 #[tauri::command]
 fn google_create_event(title: String, date: String, time: String, notes: String) -> Result<google::GoogleEvent, String> {
-    let (cid, cs) = get_google_creds();
-    google::create_calendar_event(&cid, &cs, &title, &date, &time, &notes)
+    google::create_calendar_event(&title, &date, &time, &notes)
 }
 
 #[tauri::command]

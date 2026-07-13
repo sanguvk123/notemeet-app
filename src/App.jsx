@@ -1,11 +1,13 @@
+import { useState, useEffect } from 'react';
 import { Routes, Route, NavLink, Navigate } from 'react-router-dom';
 import { invoke } from '@tauri-apps/api/tauri';
 import { NoteProvider } from './context/NoteContext';
 import HomePage from './pages/HomePage';
 import NotesPage from './pages/NotesPage';
 import CalendarPage from './pages/CalendarPage';
+import LoginPage from './pages/LoginPage';
 
-function Layout() {
+function Layout({ email, onSignOut }) {
   return (
     <div className="app">
       <nav className="nav-sidebar">
@@ -15,21 +17,48 @@ function Layout() {
         </div>
         <div className="nav-links">
           <NavLink to="/home" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
-            <span className="nav-icon">🤖</span>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/>
+              <polyline points="9 22 9 12 15 12 15 22"/>
+            </svg>
             <span>Home</span>
           </NavLink>
           <NavLink to="/notes" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
-            <span className="nav-icon">📝</span>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
+              <polyline points="14 2 14 8 20 8"/>
+              <line x1="16" y1="13" x2="8" y2="13"/>
+              <line x1="16" y1="17" x2="8" y2="17"/>
+            </svg>
             <span>Notes</span>
           </NavLink>
           <NavLink to="/calendar" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
-            <span className="nav-icon">📅</span>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
+              <line x1="16" y1="2" x2="16" y2="6"/>
+              <line x1="8" y1="2" x2="8" y2="6"/>
+              <line x1="3" y1="10" x2="21" y2="10"/>
+            </svg>
             <span>Calendar</span>
           </NavLink>
         </div>
         <div className="nav-footer">
+          <div className="nav-user" title={email}>
+            <span className="nav-user-avatar">{email.charAt(0).toUpperCase()}</span>
+          </div>
           <button className="mini-launch-btn" onClick={() => invoke('create_mini_window')} title="Open Mini Recorder">
-            ⤢
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
+              <line x1="8" y1="21" x2="16" y2="21"/>
+              <line x1="12" y1="17" x2="12" y2="21"/>
+            </svg>
+          </button>
+          <button className="nav-signout-btn" onClick={onSignOut} title="Sign out">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/>
+              <polyline points="16 17 21 12 16 7"/>
+              <line x1="21" y1="12" x2="9" y2="12"/>
+            </svg>
           </button>
         </div>
       </nav>
@@ -46,9 +75,39 @@ function Layout() {
 }
 
 export default function App() {
+  const [auth, setAuth] = useState({ checking: true, signedIn: false, email: '' });
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const status = await invoke('google_auth_status');
+        setAuth({ checking: false, signedIn: status.signedIn, email: status.email || '' });
+      } catch (_) {
+        setAuth({ checking: false, signedIn: false, email: '' });
+      }
+    })();
+  }, []);
+
+  if (auth.checking) {
+    return (
+      <div className="login-loading-screen">
+        <div className="login-spinner" />
+      </div>
+    );
+  }
+
+  if (!auth.signedIn) {
+    return (
+      <LoginPage onSignedIn={(status) => setAuth({ checking: false, signedIn: true, email: status.email || '' })} />
+    );
+  }
+
   return (
     <NoteProvider>
-      <Layout />
+      <Layout email={auth.email} onSignOut={async () => {
+        try { await invoke('google_sign_out'); } catch (_) {}
+        setAuth({ checking: false, signedIn: false, email: '' });
+      }} />
     </NoteProvider>
   );
 }

@@ -178,7 +178,7 @@ export default function CalendarPage() {
               )}
             </div>
             <button className="calendar-add-btn" onClick={() => setShowForm(!showForm)}>
-              {showForm ? '✕ Cancel' : '+ New Event'}
+              {showForm ? 'Cancel' : '+ New Event'}
             </button>
           </div>
         </div>
@@ -267,7 +267,7 @@ export default function CalendarPage() {
                           <strong>{e.title}</strong>
                         </div>
                         {e.source === 'local' && (
-                          <button className="cal-delete-btn" onClick={() => deleteEvent(e.id)}>✕</button>
+                          <button className="cal-delete-btn" onClick={() => deleteEvent(e.id)}>&times;</button>
                         )}
                       </div>
                       {e.time && <span className="cal-detail-time">{e.time}</span>}

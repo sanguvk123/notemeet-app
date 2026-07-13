@@ -46,7 +46,15 @@ export default function HomePage() {
         <div className="home-chat" ref={chatRef}>
           {messages.length === 0 && (
             <div className="home-chat-welcome">
-              <div className="home-welcome-icon">🤖</div>
+              <div className="home-welcome-icon">
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="10"/>
+                  <path d="M12 6v2"/>
+                  <path d="M12 10v2"/>
+                  <path d="M12 14v2"/>
+                  <path d="M12 18v2"/>
+                </svg>
+              </div>
               <h3>Ask anything about your meetings</h3>
               <p className="home-welcome-hints">
                 Try questions like:<br />

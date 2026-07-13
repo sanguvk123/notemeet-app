@@ -5,11 +5,11 @@ import { groupByDate, formatTime } from '../utils';
 import ChatPanel from '../components/ChatPanel';
 
 const roles = [
-  { value: 'meeting', label: 'Meeting', icon: '💼' },
-  { value: 'standup', label: 'Standup', icon: '☀️' },
-  { value: 'client', label: 'Client Call', icon: '🤝' },
-  { value: 'interview', label: 'Interview', icon: '🎯' },
-  { value: 'other', label: 'Other', icon: '📝' },
+  { value: 'meeting', label: 'Meeting' },
+  { value: 'standup', label: 'Standup' },
+  { value: 'client', label: 'Client Call' },
+  { value: 'interview', label: 'Interview' },
+  { value: 'other', label: 'Other' },
 ];
 
 export default function NotesPage() {
@@ -86,7 +86,7 @@ export default function NotesPage() {
                 type="text" placeholder="Title (optional)" value={title}
                 onChange={(e) => setTitle(e.target.value)} className="title-input"
               />
-              <button className="stop-btn" onClick={handleStop}>■ Stop & Generate</button>
+              <button className="stop-btn" onClick={handleStop}>Stop & Generate</button>
             </div>
           )}
           {processing && (
@@ -100,7 +100,12 @@ export default function NotesPage() {
         <div className="notes-list">
           {notes.length === 0 && !isRecording && (
             <div className="empty-notes">
-              <span className="empty-icon">🎙️</span>
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--text3)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z"/>
+                <path d="M19 10v2a7 7 0 01-14 0v-2"/>
+                <line x1="12" y1="19" x2="12" y2="23"/>
+                <line x1="8" y1="23" x2="16" y2="23"/>
+              </svg>
               <p>Press Record to start your first meeting note</p>
             </div>
           )}
@@ -151,14 +156,14 @@ export default function NotesPage() {
                     className={`play-btn ${playingNoteId === selectedNote.id ? 'playing' : ''}`}
                     onClick={() => playAudio(selectedNote.audioFile, selectedNote.id)}
                   >
-                    {playingNoteId === selectedNote.id ? '⏹ Stop' : '▶ Play'}
+                    {playingNoteId === selectedNote.id ? 'Stop' : 'Play'}
                   </button>
                 )}
                 <button
                   className={`chat-btn ${showChat ? 'active' : ''}`}
                   onClick={() => setShowChat(!showChat)}
                 >
-                  💬 Ask AI
+                  Ask AI
                 </button>
               </div>
             </div>
@@ -235,7 +240,14 @@ export default function NotesPage() {
           </div>
         ) : (
           <div className="empty-state">
-            <div className="empty-state-icon">🎙️</div>
+            <div className="empty-state-icon">
+              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--text3)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z"/>
+                <path d="M19 10v2a7 7 0 01-14 0v-2"/>
+                <line x1="12" y1="19" x2="12" y2="23"/>
+                <line x1="8" y1="23" x2="16" y2="23"/>
+              </svg>
+            </div>
             <h2>NoteMeet</h2>
             <p>Select a note from the sidebar or press Record to start a new meeting</p>
             {!isRecording && (
