@@ -30,6 +30,7 @@ export default function CalendarPage() {
   const [currentMonth, setCurrentMonth] = useState(new Date().getMonth());
   const [currentYear, setCurrentYear] = useState(new Date().getFullYear());
   const [selectedDate, setSelectedDate] = useState(null);
+  const [error, setError] = useState('');
 
   useEffect(() => {
     invoke('load_calendar_events').then((data) => {
@@ -38,23 +39,33 @@ export default function CalendarPage() {
     checkAuth();
   }, []);
 
+  const showError = (msg) => {
+    setError(msg);
+    setTimeout(() => setError(''), 5000);
+  };
+
   const checkAuth = async () => {
     try {
       const status = await invoke('google_auth_status');
       setAuthStatus({ signedIn: status.signedIn, email: status.email || '' });
     } catch (e) {
-      console.error('Auth check:', e);
+      showError('Failed to check auth status');
     }
   };
 
   const signIn = async () => {
     try {
       setSyncing(true);
+      setError('');
       await invoke('google_sign_in');
-      await checkAuth();
-      await syncGoogle();
+      const status = await invoke('google_auth_status');
+      setAuthStatus({ signedIn: status.signedIn, email: status.email || '' });
+      if (status.signedIn) {
+        const events = await invoke('google_sync_events');
+        if (events?.length) setGoogleEvents(events);
+      }
     } catch (e) {
-      console.error('Sign in error:', e);
+      showError(String(e));
     }
     setSyncing(false);
   };
@@ -65,13 +76,22 @@ export default function CalendarPage() {
       setAuthStatus({ signedIn: false, email: '' });
       setGoogleEvents([]);
     } catch (e) {
-      console.error('Sign out error:', e);
+      showError('Failed to sign out');
     }
   };
 
   const syncGoogle = async () => {
     if (!authStatus.signedIn) return;
     setSyncing(true);
+    setError('');
+    try {
+      const events = await invoke('google_sync_events');
+      if (events?.length) setGoogleEvents(events);
+    } catch (e) {
+      showError(String(e));
+    }
+    setSyncing(false);
+  };
     try {
       const events = await invoke('google_sync_events');
       if (events?.length) setGoogleEvents(events);
@@ -162,6 +182,8 @@ export default function CalendarPage() {
             </button>
           </div>
         </div>
+
+        {error && <div className="calendar-error">{error}</div>}
 
         {showForm && (
           <div className="calendar-form">

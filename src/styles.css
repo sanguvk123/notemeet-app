@@ -1400,3 +1400,15 @@ body {
   display: flex;
   align-items: center;
 }
+
+.calendar-error {
+  background: rgba(244, 63, 94, 0.1);
+  border: 1px solid var(--red);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+  margin-bottom: 16px;
+  font-size: 13px;
+  color: var(--red);
+  line-height: 1.5;
+  word-break: break-word;
+}
