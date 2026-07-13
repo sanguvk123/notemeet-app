@@ -9,6 +9,7 @@ use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::time::Duration;
+use tauri::Manager;
 use url::form_urlencoded;
 
 macro_rules! log { ($($t:tt)*) => { eprintln!("[NoteMeet {}] {}", Local::now().format("%H:%M:%S%.3f"), format!($($t)*)) } }
@@ -66,7 +67,7 @@ pub fn is_signed_in() -> bool {
     load_tokens().is_some()
 }
 
-pub fn start_auth_flow(_app_handle: tauri::AppHandle) -> Result<String, String> {
+pub fn start_auth_flow(app_handle: tauri::AppHandle) -> Result<String, String> {
     let cid = client_id()?;
     let cs = client_secret()?;
 
@@ -83,13 +84,7 @@ pub fn start_auth_flow(_app_handle: tauri::AppHandle) -> Result<String, String> 
 
     let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
 
-    let listener =
-        TcpListener::bind("127.0.0.1:0").map_err(|e| format!("Local server: {}", e))?;
-    let port = listener
-        .local_addr()
-        .map_err(|e| format!("Local addr: {}", e))?
-        .port();
-    let redirect_uri_str = format!("http://127.0.0.1:{}", port);
+    let redirect_uri_str = "http://127.0.0.1:54321".to_string();
 
     let redirect_uri = RedirectUrl::new(redirect_uri_str.clone())
         .map_err(|e| format!("Bad redirect URI: {}", e))?;
@@ -112,11 +107,13 @@ pub fn start_auth_flow(_app_handle: tauri::AppHandle) -> Result<String, String> 
         .url();
 
     log!(
-        "Opening browser for Google sign-in, local server on port {}",
-        port
+        "Opening browser for Google sign-in on port 54321"
     );
-    webbrowser::open(auth_url.as_str()).map_err(|e| format!("Open browser: {}", e))?;
+    tauri::api::shell::open(&app_handle.shell_scope(), auth_url.to_string(), None)
+        .map_err(|e| format!("Open browser: {}", e))?;
 
+    let listener =
+        TcpListener::bind("127.0.0.1:54321").map_err(|e| format!("Local server: {}", e))?;
     listener
         .set_nonblocking(true)
         .map_err(|e| format!("Set nonblocking: {}", e))?;

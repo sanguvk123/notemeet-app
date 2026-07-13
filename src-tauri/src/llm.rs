@@ -27,9 +27,18 @@ pub fn generate_notes(title: &str, transcript: &str, meeting_type: &str) -> Resu
     log!("API key present: {}...", &api_key[..12]);
 
     if api_key == "sk-or-v1-xxxxxxxx" || api_key == "sk-ant-xxxxxxxx" {
+        let mock_title = {
+            let t = title.trim();
+            if t.is_empty() || t == "Untitled Meeting" || t == "Quick Note" {
+                let words: Vec<&str> = transcript.split_whitespace().take(5).collect();
+                if words.is_empty() { "Untitled Meeting".to_string() } else { words.join(" ") }
+            } else {
+                t.to_string()
+            }
+        };
         return Ok(Note {
             id: Uuid::new_v4().to_string(),
-            title: title.to_string(),
+            title: mock_title,
             date: Utc::now().to_rfc3339(),
             short_summary: "Team discussed Q3 roadmap and pricing timeline.".into(),
             full_summary: "Discussed Q3 roadmap priorities. Key decisions made on pricing page timeline. Team alignment session focused on delivery milestones. Ananya is finalizing the onboarding flow. Follow-up scheduled for next Tuesday.".into(),
@@ -59,6 +68,7 @@ pub fn generate_notes(title: &str, transcript: &str, meeting_type: &str) -> Resu
     };
 
     let system_prompt = "You are a meeting notes assistant. Extract structured information from the transcript. Return ONLY valid JSON with these exact fields:
+- title: string (a short 3-6 word title summarizing the meeting topic)
 - short_summary: string (1-2 sentence executive summary)
 - full_summary: string (detailed paragraph summary covering all discussion points)
 - action_items: array of strings (who needs to do what by when)
@@ -149,9 +159,18 @@ Do not wrap in markdown fences. Return raw JSON only.";
         })
         .unwrap_or_default();
 
+    let note_title = {
+        let t = title.trim();
+        if t.is_empty() || t == "Untitled Meeting" || t == "Quick Note" {
+            parsed["title"].as_str().unwrap_or("Untitled Meeting").to_string()
+        } else {
+            t.to_string()
+        }
+    };
+
     Ok(Note {
         id: Uuid::new_v4().to_string(),
-        title: title.to_string(),
+        title: note_title,
         date: Utc::now().to_rfc3339(),
         short_summary: parsed["short_summary"].as_str().unwrap_or("").to_string(),
         full_summary: parsed["full_summary"].as_str().unwrap_or("").to_string(),

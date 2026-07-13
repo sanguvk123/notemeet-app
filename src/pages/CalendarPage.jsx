@@ -1,9 +1,12 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { invoke } from '@tauri-apps/api/tauri';
 import { useNotes } from '../context/NoteContext';
 
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const SHORT_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const WEEKEND_DAYS = [0, 6]; // Sun, Sat
 
 function parseDateFromNote(note) {
   if (!note?.date) return null;
@@ -30,27 +33,122 @@ function formatTimeDisplay(dateStr, timeStr) {
 function dateLabel(dateStr) {
   const d = new Date(dateStr + 'T00:00:00');
   const now = new Date();
-  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  const today = toDateStr(now.getFullYear(), now.getMonth(), now.getDate());
   if (dateStr === today) return 'Today';
   const tmrw = new Date(now);
   tmrw.setDate(tmrw.getDate() + 1);
-  const tomorrow = `${tmrw.getFullYear()}-${String(tmrw.getMonth() + 1).padStart(2, '0')}-${String(tmrw.getDate()).padStart(2, '0')}`;
+  const tomorrow = toDateStr(tmrw.getFullYear(), tmrw.getMonth(), tmrw.getDate());
   if (dateStr === tomorrow) return 'Tomorrow';
   return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
 }
 
+function toDateStr(year, month, day) {
+  return `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+function getWeekStart(date, weekStartsOn = 0) {
+  const d = new Date(date);
+  d.setHours(0, 0, 0, 0);
+  const day = d.getDay();
+  const diff = (day < weekStartsOn ? 7 : 0) + day - weekStartsOn;
+  d.setDate(d.getDate() - diff);
+  return d;
+}
+
+function addDays(date, days) {
+  const d = new Date(date);
+  d.setDate(d.getDate() + days);
+  return d;
+}
+
+function isPast(dateStr, timeStr) {
+  const now = new Date();
+  const d = new Date(dateStr + 'T' + (timeStr || '12:00'));
+  return d < now;
+}
+
+function getWeekDates(weekStart) {
+  return Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
+}
+
+function isWeekend(dayIndex) {
+  return WEEKEND_DAYS.includes(dayIndex);
+}
+
+function getEventDuration(event) {
+  if (!event.time) return 0;
+  if (event.endTime) {
+    const [sh, sm] = event.time.split(':').map(Number);
+    const [eh, em] = event.endTime.split(':').map(Number);
+    const dur = (eh * 60 + em) - (sh * 60 + sm);
+    return Math.max(20, dur);
+  }
+  return 60;
+}
+
+function getEventTop(timeStr, startHour) {
+  if (!timeStr) return 0;
+  const [h, m] = timeStr.split(':').map(Number);
+  return Math.max(0, ((h - startHour) * 60 + m));
+}
+
+function titleMatchesEvent(note, event) {
+  if (!event?.title) return false;
+  const words = note.title.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+  const summary = (note.shortSummary || '').toLowerCase();
+  const eventTitle = event.title.toLowerCase();
+  return words.some(w => eventTitle.includes(w)) || summary.includes(eventTitle);
+}
+
 export default function CalendarPage({ isGuest }) {
+  const navigate = useNavigate();
   const { notes } = useNotes();
+  const gridRef = useRef(null);
+  const longPressTimer = useRef(null);
+  const touchStartX = useRef(null);
+  const touchStartY = useRef(null);
+
   const [localEvents, setLocalEvents] = useState([]);
   const [googleEvents, setGoogleEvents] = useState([]);
   const [authStatus, setAuthStatus] = useState({ signedIn: false, email: '' });
   const [syncing, setSyncing] = useState(false);
   const [showForm, setShowForm] = useState(false);
+  const [showQuickAdd, setShowQuickAdd] = useState(null);
+  const [quickAddDay, setQuickAddDay] = useState(null);
   const [formData, setFormData] = useState({ title: '', date: '', time: '', notes: '' });
-  const [currentMonth, setCurrentMonth] = useState(new Date().getMonth());
-  const [currentYear, setCurrentYear] = useState(new Date().getFullYear());
-  const [selectedDate, setSelectedDate] = useState(null);
   const [error, setError] = useState('');
+  const [viewMode, setViewMode] = useState('month');
+  const [compactView, setCompactView] = useState(false);
+  const [selectedDate, setSelectedDate] = useState(null);
+  const [editingEvent, setEditingEvent] = useState(null);
+  const [editForm, setEditForm] = useState({ title: '', time: '', notes: '' });
+  const [sidebarMonth, setSidebarMonth] = useState(() => new Date().getMonth());
+  const [sidebarYear, setSidebarYear] = useState(() => new Date().getFullYear());
+
+  const [currentMonth, setCurrentMonth] = useState(() => {
+    try { const m = parseInt(localStorage.getItem('calMonth')); return m >= 0 && m <= 11 ? m : new Date().getMonth(); }
+    catch { return new Date().getMonth(); }
+  });
+  const [currentYear, setCurrentYear] = useState(() => {
+    try { const y = parseInt(localStorage.getItem('calYear')); return y > 2000 ? y : new Date().getFullYear(); }
+    catch { return new Date().getFullYear(); }
+  });
+  const [weekStart, setWeekStart] = useState(() => {
+    const now = new Date();
+    try {
+      const s = localStorage.getItem('calWeekStart');
+      if (s) { const d = new Date(s); if (!isNaN(d.getTime())) return d; }
+    } catch {}
+    return getWeekStart(now);
+  });
+
+  const persistMonth = useCallback((m, y) => {
+    try { localStorage.setItem('calMonth', String(m)); localStorage.setItem('calYear', String(y)); } catch {}
+  }, []);
+
+  const persistWeekStart = useCallback((d) => {
+    try { localStorage.setItem('calWeekStart', d.toISOString()); } catch {}
+  }, []);
 
   useEffect(() => {
     invoke('load_calendar_events').then((data) => {
@@ -64,7 +162,7 @@ export default function CalendarPage({ isGuest }) {
       const status = await invoke('google_auth_status');
       setAuthStatus({ signedIn: status.signedIn, email: status.email || '' });
       if (status.signedIn) await doSync();
-    } catch (_) {}
+    } catch {}
   };
 
   const showError = (msg) => {
@@ -78,23 +176,18 @@ export default function CalendarPage({ isGuest }) {
     try {
       const events = await invoke('google_sync_events');
       setGoogleEvents(events || []);
-    } catch (e) {
-      showError(String(e));
-    }
+    } catch (e) { showError(String(e)); }
     setSyncing(false);
   };
 
   const signIn = async () => {
     try {
-      setSyncing(true);
-      setError('');
+      setSyncing(true); setError('');
       await invoke('google_sign_in');
       const status = await invoke('google_auth_status');
       setAuthStatus({ signedIn: status.signedIn, email: status.email || '' });
       if (status.signedIn) await doSync();
-    } catch (e) {
-      showError(String(e));
-    }
+    } catch (e) { showError(String(e)); }
     setSyncing(false);
   };
 
@@ -103,62 +196,138 @@ export default function CalendarPage({ isGuest }) {
       await invoke('google_sign_out');
       setAuthStatus({ signedIn: false, email: '' });
       setGoogleEvents([]);
-    } catch (_) {}
+    } catch {}
   };
 
   const addEvent = async () => {
     if (!formData.title.trim() || !formData.date) return;
     try {
       if (authStatus.signedIn) {
-        await invoke('google_create_event', {
-          title: formData.title,
-          date: formData.date,
-          time: formData.time || '',
-          notes: formData.notes || '',
-        });
+        await invoke('google_create_event', { title: formData.title, date: formData.date, time: formData.time || '', notes: formData.notes || '' });
         await doSync();
       } else {
-        await invoke('add_calendar_event', {
-          title: formData.title,
-          date: formData.date,
-          time: formData.time || '',
-          notes: formData.notes || '',
-        });
+        await invoke('add_calendar_event', { title: formData.title, date: formData.date, time: formData.time || '', notes: formData.notes || '' });
+        const saved = await invoke('load_calendar_events');
+        setLocalEvents(saved || []);
       }
-      setLocalEvents((prev) => [...prev]);
       setShowForm(false);
+      setShowQuickAdd(null);
       setFormData({ title: '', date: '', time: '', notes: '' });
       showError('Event saved');
-    } catch (e) {
-      showError(String(e));
-    }
+    } catch (e) { showError(String(e)); }
   };
 
   const deleteEvent = async (id) => {
     try {
       await invoke('delete_calendar_event', { eventId: id });
       setLocalEvents((prev) => prev.filter((e) => e.id !== id));
-    } catch (_) {}
+    } catch {}
   };
+
+  const updateEvent = async () => {
+    if (!editingEvent || !editForm.title.trim()) return;
+    try {
+      if (editingEvent.source === 'google') {
+        await invoke('google_create_event', { title: editForm.title, date: editingEvent.date, time: editForm.time || '', notes: editForm.notes || '' });
+        await doSync();
+      } else {
+        await deleteEvent(editingEvent.id);
+        await invoke('add_calendar_event', { title: editForm.title, date: editingEvent.date, time: editForm.time || '', notes: editForm.notes || '' });
+        const saved = await invoke('load_calendar_events');
+        setLocalEvents(saved || []);
+      }
+      setEditingEvent(null);
+      setEditForm({ title: '', time: '', notes: '' });
+      showError('Event updated');
+    } catch (e) { showError(String(e)); }
+  };
+
+  const moveEventToDate = async (event, newDate) => {
+    try {
+      if (event.source === 'local') {
+        try { await invoke('delete_calendar_event', { eventId: event.id }); } catch {}
+        await invoke('add_calendar_event', { title: event.title, date: newDate, time: event.time || '', notes: event.notes || '' });
+        const saved = await invoke('load_calendar_events');
+        setLocalEvents(saved || []);
+      } else if (authStatus.signedIn) {
+        await invoke('google_create_event', { title: event.title, date: newDate, time: event.time || '', notes: event.notes || '' });
+        await doSync();
+      }
+      showError('Event moved');
+    } catch (e) { showError(String(e)); }
+  };
+
+  const startEditEvent = (e) => {
+    setEditingEvent(e);
+    setEditForm({ title: e.title, time: e.time || '', notes: e.notes || '' });
+  };
+
+  const cancelEdit = () => {
+    setEditingEvent(null);
+    setEditForm({ title: '', time: '', notes: '' });
+  };
+
+  const goToToday = () => {
+    const now = new Date();
+    setCurrentMonth(now.getMonth());
+    setCurrentYear(now.getFullYear());
+    setSelectedDate(now.getDate());
+    setSidebarMonth(now.getMonth());
+    setSidebarYear(now.getFullYear());
+    persistMonth(now.getMonth(), now.getFullYear());
+    if (viewMode === 'week') {
+      const ws = getWeekStart(now);
+      setWeekStart(ws);
+      persistWeekStart(ws);
+    }
+  };
+
+  const handleCellDoubleClick = (day) => {
+    const ds = toDateStr(currentYear, currentMonth, day);
+    setFormData({ ...formData, date: ds });
+    setShowForm(true);
+  };
+
+  const handleWeekSlotClick = (dateStr, timeStr) => {
+    setFormData({ title: '', date: dateStr, time: timeStr || '', notes: '' });
+    setShowForm(true);
+  };
+
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.key === 'Escape') {
+        if (editingEvent) { cancelEdit(); return; }
+        if (showForm || showQuickAdd) { setShowForm(false); setShowQuickAdd(null); return; }
+        setSelectedDate(null);
+      }
+      if (e.key === 'Enter' && !e.target.closest('input,textarea,select')) goToToday();
+      if (e.key === 'ArrowLeft' && !e.target.closest('input,textarea,select')) {
+        if (viewMode === 'month') {
+          if (currentMonth === 0) { setCurrentMonth(11); setCurrentYear((y) => y - 1); }
+          else setCurrentMonth((m) => m - 1);
+        } else {
+          setWeekStart((prev) => { const p = addDays(prev, -7); persistWeekStart(p); return p; });
+        }
+      }
+      if (e.key === 'ArrowRight' && !e.target.closest('input,textarea,select')) {
+        if (viewMode === 'month') {
+          if (currentMonth === 11) { setCurrentMonth(0); setCurrentYear((y) => y + 1); }
+          else setCurrentMonth((m) => m + 1);
+        } else {
+          setWeekStart((prev) => { const n = addDays(prev, 7); persistWeekStart(n); return n; });
+        }
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [viewMode, currentMonth, currentYear, editingEvent, showForm, showQuickAdd]);
+
+  useEffect(() => { persistMonth(currentMonth, currentYear); }, [currentMonth, currentYear]);
+  useEffect(() => { if (selectedDate) { setSidebarMonth(currentMonth); setSidebarYear(currentYear); } }, [selectedDate]);
 
   const noteDates = notes.map(parseDateFromNote).filter(Boolean);
   const daysInMonth = getDaysInMonth(currentYear, currentMonth);
   const firstDay = getFirstDayOfMonth(currentYear, currentMonth);
-
-  const prevMonth = () => {
-    if (currentMonth === 0) { setCurrentMonth(11); setCurrentYear((y) => y - 1); }
-    else setCurrentMonth((m) => m - 1);
-    setSelectedDate(null);
-  };
-
-  const nextMonth = () => {
-    if (currentMonth === 11) { setCurrentMonth(0); setCurrentYear((y) => y + 1); }
-    else setCurrentMonth((m) => m + 1);
-    setSelectedDate(null);
-  };
-
-  const dayHasNote = (day) =>
-    noteDates.some((d) => d.getFullYear() === currentYear && d.getMonth() === currentMonth && d.getDate() === day);
 
   const allEvents = [
     ...localEvents.map((e) => ({ ...e, source: 'local' })),
@@ -166,26 +335,32 @@ export default function CalendarPage({ isGuest }) {
   ];
 
   const dayEvents = (day) => {
-    const ds = `${currentYear}-${String(currentMonth + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    const ds = toDateStr(currentYear, currentMonth, day);
     return allEvents.filter((e) => e.date === ds);
   };
 
-  function todayStr() {
-    const d = new Date();
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-  }
-  function nowStr() {
-    const d = new Date();
-    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-  }
+  const dayHasNote = (day) =>
+    noteDates.some((d) => d.getFullYear() === currentYear && d.getMonth() === currentMonth && d.getDate() === day);
+
+  function todayStr() { const d = new Date(); return toDateStr(d.getFullYear(), d.getMonth(), d.getDate()); }
+  function nowStr() { const d = new Date(); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; }
 
   const upcoming = [...allEvents]
-    .filter((e) => e.date >= todayStr() || (e.date === todayStr() && e.time >= nowStr()))
-    .sort((a, b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time));
+    .filter((e) => {
+      if (e.date > todayStr()) return true;
+      if (e.date < todayStr()) return false;
+      if (!e.time) return true;
+      return e.time >= nowStr();
+    })
+    .sort((a, b) => (a.date || '').localeCompare(b.date || '') || (a.time || '').localeCompare(b.time || ''));
 
-  const selectedDs = selectedDate
-    ? `${currentYear}-${String(currentMonth + 1).padStart(2, '0')}-${String(selectedDate).padStart(2, '0')}`
-    : null;
+  const prepareEvents = upcoming.filter((e) => {
+    const eventDate = new Date(e.date + 'T' + (e.time || '00:00'));
+    const diffMs = eventDate.getTime() - Date.now();
+    return diffMs > 0 && diffMs <= 3600000;
+  });
+
+  const selectedDs = selectedDate ? toDateStr(currentYear, currentMonth, selectedDate) : null;
   const selectedEvts = selectedDs ? allEvents.filter((e) => e.date === selectedDs) : [];
   const selectedNotes = selectedDs ? notes.filter((n) => {
     const d = parseDateFromNote(n);
@@ -194,42 +369,155 @@ export default function CalendarPage({ isGuest }) {
 
   const today = new Date();
   const isCurrentMonth = today.getFullYear() === currentYear && today.getMonth() === currentMonth;
+  const weekDates = getWeekDates(weekStart);
+
+  const sidebarDaysInMonth = getDaysInMonth(sidebarYear, sidebarMonth);
+  const sidebarFirstDay = getFirstDayOfMonth(sidebarYear, sidebarMonth);
+
+  const swipeHandlers = {
+    onTouchStart: (e) => {
+      touchStartX.current = e.touches[0].clientX;
+      touchStartY.current = e.touches[0].clientY;
+    },
+    onTouchEnd: (e) => {
+      if (touchStartX.current === null) return;
+      const dx = e.changedTouches[0].clientX - touchStartX.current;
+      const dy = e.changedTouches[0].clientY - touchStartY.current;
+      if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+        if (viewMode === 'month') {
+          if (dx < 0) {
+            if (currentMonth === 11) { setCurrentMonth(0); setCurrentYear((y) => y + 1); }
+            else setCurrentMonth((m) => m + 1);
+          } else {
+            if (currentMonth === 0) { setCurrentMonth(11); setCurrentYear((y) => y - 1); }
+            else setCurrentMonth((m) => m - 1);
+          }
+        } else {
+          if (dx < 0) { setWeekStart((prev) => { const n = addDays(prev, 7); persistWeekStart(n); return n; }); }
+          else { setWeekStart((prev) => { const p = addDays(prev, -7); persistWeekStart(p); return p; }); }
+        }
+      }
+      touchStartX.current = null;
+      touchStartY.current = null;
+    },
+  };
+
+  const handleDragStart = (e, event) => {
+    e.dataTransfer.setData('text/plain', JSON.stringify({ id: event.id, source: event.source }));
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const allEventsRef = useRef(allEvents);
+  allEventsRef.current = allEvents;
+
+  const handleDrop = (e, day) => {
+    e.preventDefault();
+    try {
+      const data = JSON.parse(e.dataTransfer.getData('text/plain'));
+      const evts = allEventsRef.current;
+      const event = evts.find((ev) => ev.id === data.id && ev.source === data.source);
+      if (event) {
+        const ds = toDateStr(currentYear, currentMonth, day);
+        if (ds !== event.date) {
+          moveEventToDate(event, ds);
+        }
+      }
+    } catch {}
+  };
+
+  const handleDragOver = (e) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+  };
+
+  const startHour = 6;
+  const endHour = 23;
+  const hourHeight = 56;
+
+  const [currentTimePos, setCurrentTimePos] = useState(0);
+  useEffect(() => {
+    const update = () => {
+      const now = new Date();
+      const minutes = (now.getHours() - startHour) * 60 + now.getMinutes();
+      setCurrentTimePos(Math.max(0, (minutes / 60) * hourHeight));
+    };
+    update();
+    const id = setInterval(update, 60000);
+    return () => clearInterval(id);
+  }, []);
+
+  const linkedNotes = (event) => {
+    if (selectedDate == null) return [];
+    return notes.filter((n) => {
+      const nd = parseDateFromNote(n);
+      return nd && nd.getFullYear() === currentYear && nd.getMonth() === currentMonth && nd.getDate() === selectedDate && titleMatchesEvent(n, event);
+    });
+  };
 
   return (
-    <main className="main-content cal-content">
+    <main className="main-content cal-content" tabIndex={-1} ref={gridRef} {...swipeHandlers}>
+      {prepareEvents.length > 0 && (
+        <div className="cal-prepare-banner">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+          </svg>
+          <span className="cal-prepare-text">
+            <strong>{prepareEvents[0].title}</strong> — {prepareEvents[0].time ? formatTimeDisplay(prepareEvents[0].date, prepareEvents[0].time) : 'All day'}
+            <span className="cal-prepare-when"> in {Math.ceil((new Date(prepareEvents[0].date + 'T' + (prepareEvents[0].time || '00:00')).getTime() - Date.now()) / 60000)} min</span>
+          </span>
+          <button className="cal-prepare-btn" onClick={() => navigate('/notes')}>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            Start Recording
+          </button>
+          <button className="cal-prepare-btn" onClick={goToToday}>Go to Calendar</button>
+        </div>
+      )}
+
       <div className="cal-layout">
         <div className="cal-main">
           <div className="cal-topbar">
             <div className="cal-topbar-left">
-              <h1 className="cal-title">Calendar</h1>
-              <span className="cal-month-label">{MONTHS[currentMonth]} {currentYear}</span>
+              <h1 className="cal-title">
+                {viewMode === 'month'
+                  ? `${MONTHS[currentMonth]} ${currentYear}`
+                  : `${SHORT_MONTHS[weekStart.getMonth()]} ${weekStart.getDate()} – ${SHORT_MONTHS[addDays(weekStart, 6).getMonth()]} ${addDays(weekStart, 6).getDate()}, ${addDays(weekStart, 6).getFullYear()}`
+                }
+              </h1>
             </div>
             <div className="cal-topbar-right">
+              <div className="cal-view-toggle">
+                <button className={`cal-view-btn ${viewMode === 'month' ? 'active' : ''}`} onClick={() => setViewMode('month')}>Month</button>
+                <button className={`cal-view-btn ${viewMode === 'week' ? 'active' : ''}`} onClick={() => setViewMode('week')}>Week</button>
+              </div>
+              <button className={`cal-compact-btn ${compactView ? 'active' : ''}`} onClick={() => setCompactView(!compactView)} title="Compact view">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                  <line x1="8" y1="6" x2="16" y2="6"/><line x1="8" y1="10" x2="16" y2="10"/><line x1="8" y1="14" x2="16" y2="14"/><line x1="8" y1="18" x2="16" y2="18"/>
+                </svg>
+              </button>
+              <button className="cal-today-btn" onClick={goToToday}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+                </svg>
+                <span>Today</span>
+              </button>
               {!isGuest && (
                 <div className="cal-google-row">
-                  {syncing && <span className="sync-spinner" />}
+                  {syncing && <span className="sync-spinner sync-pulse" />}
                   {authStatus.signedIn ? (
                     <>
                       <span className="cal-google-dot-active" />
-                      <button className="cal-ghost-btn" onClick={() => doSync()} disabled={syncing}>
-                        Sync
-                      </button>
-                      <button className="cal-ghost-btn cal-ghost-btn-danger" onClick={signOut}>
-                        Disconnect
-                      </button>
+                      <button className="cal-ghost-btn" onClick={() => doSync()} disabled={syncing}>{syncing ? 'Syncing...' : 'Sync'}</button>
+                      <button className="cal-ghost-btn cal-ghost-btn-danger" onClick={signOut}>Disconnect</button>
                     </>
                   ) : (
-                    <button className="cal-ghost-btn" onClick={signIn} disabled={syncing}>
-                      {syncing ? 'Connecting...' : 'Connect Google'}
-                    </button>
+                    <button className="cal-ghost-btn" onClick={signIn} disabled={syncing}>{syncing ? 'Connecting...' : 'Connect Google'}</button>
                   )}
                 </div>
               )}
               {isGuest && <span className="guest-badge">Guest</span>}
               <button className="cal-primary-btn" onClick={() => setShowForm(!showForm)}>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-                  <line x1="12" y1="5" x2="12" y2="19"/>
-                  <line x1="5" y1="12" x2="19" y2="12"/>
+                  <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
                 </svg>
                 {showForm ? 'Cancel' : 'New Event'}
               </button>
@@ -237,28 +525,39 @@ export default function CalendarPage({ isGuest }) {
           </div>
 
           {error && (
-            <div className={`cal-toast ${error === 'Event saved' ? 'cal-toast-success' : 'cal-toast-error'}`}>
+            <div className={`cal-toast ${error === 'Event saved' || error === 'Event updated' || error === 'Event moved' ? 'cal-toast-success' : 'cal-toast-error'}`}>
               {error}
             </div>
           )}
 
           {showForm && (
-            <div className="cal-event-form">
-              <input className="cal-input" placeholder="Event title" value={formData.title}
-                onChange={(e) => setFormData({ ...formData, title: e.target.value })} />
-              <div className="cal-form-row">
-                <input type="date" className="cal-input cal-input-half" value={formData.date}
-                  onChange={(e) => setFormData({ ...formData, date: e.target.value })} />
-                <input type="time" className="cal-input cal-input-half" value={formData.time}
-                  onChange={(e) => setFormData({ ...formData, time: e.target.value })} />
+            <div className="modal-overlay" onClick={() => { setShowForm(false); setError(''); }}>
+              <div className="cal-modal-card" onClick={(e) => e.stopPropagation()}>
+                <div className="cal-modal-header">
+                  <span className="cal-modal-title">{formData.id ? 'Edit Event' : 'New Event'}</span>
+                  <button className="cal-modal-close" onClick={() => { setShowForm(false); setError(''); }}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                      <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                    </svg>
+                  </button>
+                </div>
+                <input className="cal-input" placeholder="Event title" value={formData.title}
+                  autoFocus
+                  onChange={(e) => setFormData({ ...formData, title: e.target.value })} />
+                <div className="cal-form-row">
+                  <input type="date" className="cal-input cal-input-half" value={formData.date}
+                    onChange={(e) => setFormData({ ...formData, date: e.target.value })} />
+                  <input type="time" className="cal-input cal-input-half" value={formData.time}
+                    onChange={(e) => setFormData({ ...formData, time: e.target.value })} />
+                </div>
+                <textarea className="cal-input cal-textarea" placeholder="Notes (optional)" value={formData.notes}
+                  onChange={(e) => setFormData({ ...formData, notes: e.target.value })} />
+                <div className="cal-modal-actions">
+                  <button className="cal-ghost-btn" onClick={() => { setShowForm(false); setError(''); }}>Cancel</button>
+                  <button className="cal-primary-btn" onClick={addEvent}
+                    disabled={!formData.title.trim() || !formData.date}>Save Event</button>
+                </div>
               </div>
-              <textarea className="cal-input cal-textarea" placeholder="Notes (optional)"
-                value={formData.notes}
-                onChange={(e) => setFormData({ ...formData, notes: e.target.value })} />
-              <button className="cal-primary-btn cal-primary-btn-full" onClick={addEvent}
-                disabled={!formData.title.trim() || !formData.date}>
-                Save Event
-              </button>
             </div>
           )}
 
@@ -272,7 +571,8 @@ export default function CalendarPage({ isGuest }) {
               </div>
               <div className="cal-upcoming-list">
                 {upcoming.slice(0, 5).map((e, i) => (
-                  <div key={`${e.source}-${e.id || i}`} className="cal-upcoming-card">
+                  <div key={`${e.source}-${e.id || i}`}
+                    className={`cal-upcoming-card ${isPast(e.date, e.time) ? 'cal-upcoming-past' : ''}`}>
                     <div className="cal-upcoming-time">
                       <span className="cal-upcoming-time-value">{e.time ? formatTimeDisplay(e.date, e.time) : 'All day'}</span>
                       <span className="cal-upcoming-date-text">{dateLabel(e.date)}</span>
@@ -287,79 +587,245 @@ export default function CalendarPage({ isGuest }) {
             </div>
           )}
 
-          <div className="cal-nav-bar">
-            <button className="cal-nav-arrow" onClick={prevMonth}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                <polyline points="15 18 9 12 15 6"/>
-              </svg>
-            </button>
-            <div className="cal-nav-dots">
-              {Array.from({ length: 12 }, (_, i) => (
-                <button key={i}
-                  className={`cal-nav-dot ${i === currentMonth ? 'cal-nav-dot-active' : ''}`}
-                  onClick={() => { setCurrentMonth(i); setSelectedDate(null); }}
-                  title={MONTHS[i]} />
-              ))}
-            </div>
-            <button className="cal-nav-arrow" onClick={nextMonth}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                <polyline points="9 18 15 12 9 6"/>
-              </svg>
-            </button>
-          </div>
-
-          <div className="cal-grid">
-            {DAYS.map((d) => (
-              <div key={d} className="cal-grid-header">{d}</div>
-            ))}
-            {Array.from({ length: firstDay }).map((_, i) => (
-              <div key={`e-${i}`} className="cal-cell cal-cell-empty" />
-            ))}
-            {Array.from({ length: daysInMonth }, (_, i) => i + 1).map((day) => {
-              const hasNote = dayHasNote(day);
-              const evts = dayEvents(day);
-              const isSelected = selectedDate === day;
-              const isToday = isCurrentMonth && today.getDate() === day;
-              return (
-                <div key={day}
-                  className={`cal-cell ${isToday ? 'cal-cell-today' : ''} ${isSelected ? 'cal-cell-selected' : ''} ${hasNote || evts.length > 0 ? 'cal-cell-active' : ''}`}
-                  onClick={() => setSelectedDate(selectedDate === day ? null : day)}>
-                  <span className="cal-cell-num">{day}</span>
-                  {(hasNote || evts.length > 0) && (
-                    <div className="cal-cell-indicators">
-                      {hasNote && <span className="cal-cell-dot" />}
-                      {evts.some(e => e.source === 'google') && <span className="cal-cell-dot cal-cell-dot-google" />}
-                      {evts.some(e => e.source === 'local') && <span className="cal-cell-dot cal-cell-dot-local" />}
-                    </div>
-                  )}
+          {viewMode === 'month' ? (
+            <>
+              <div className="cal-nav-bar">
+                <button className="cal-nav-arrow" onClick={() => {
+                  if (currentMonth === 0) { setCurrentMonth(11); setCurrentYear((y) => y - 1); }
+                  else setCurrentMonth((m) => m - 1);
+                  setSelectedDate(null);
+                }}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                    <polyline points="15 18 9 12 15 6"/>
+                  </svg>
+                </button>
+                <div className="cal-nav-dots">
+                  {MONTHS.map((name, i) => (
+                    <button key={i}
+                      className={`cal-nav-dot ${i === currentMonth ? 'cal-nav-dot-active' : ''}`}
+                      onClick={() => { setCurrentMonth(i); setSelectedDate(null); }} title={name}>
+                      {i === currentMonth ? name.substring(0, 3) : ''}
+                    </button>
+                  ))}
                 </div>
-              );
-            })}
-          </div>
+                <button className="cal-nav-arrow" onClick={() => {
+                  if (currentMonth === 11) { setCurrentMonth(0); setCurrentYear((y) => y + 1); }
+                  else setCurrentMonth((m) => m + 1);
+                  setSelectedDate(null);
+                }}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                    <polyline points="9 18 15 12 9 6"/>
+                  </svg>
+                </button>
+              </div>
+
+              <div className={`cal-grid ${compactView ? 'cal-grid-compact' : ''}`}>
+                {DAYS.map((d, i) => (
+                  <div key={d} className={`cal-grid-header ${isWeekend(i) ? 'cal-grid-header-weekend' : ''}`}>{d}</div>
+                ))}
+                {Array.from({ length: firstDay }).map((_, i) => (
+                  <div key={`e-${i}`} className="cal-cell cal-cell-empty" />
+                ))}
+                {Array.from({ length: daysInMonth }, (_, i) => i + 1).map((day) => {
+                  const hasNote = dayHasNote(day);
+                  const evts = dayEvents(day);
+                  const isSelected = selectedDate === day;
+                  const isToday = isCurrentMonth && today.getDate() === day;
+                  const dayOfWeek = new Date(currentYear, currentMonth, day).getDay();
+                  return (
+                    <div key={day}
+                      className={`cal-cell ${isToday ? 'cal-cell-today' : ''} ${isSelected ? 'cal-cell-selected' : ''} ${hasNote || evts.length > 0 ? 'cal-cell-active' : ''} ${isWeekend(dayOfWeek) ? 'cal-cell-weekend' : ''}`}
+                      onClick={() => {
+                        setSelectedDate(selectedDate === day ? null : day);
+                        setShowQuickAdd(null);
+                      }}
+                      onDoubleClick={() => handleCellDoubleClick(day)}
+                      onMouseDown={() => {
+                        longPressTimer.current = setTimeout(() => {
+                          const ds = toDateStr(currentYear, currentMonth, day);
+                          setQuickAddDay(day);
+                          setFormData({ ...formData, date: ds });
+                          setShowQuickAdd(day);
+                        }, 500);
+                      }}
+                      onMouseUp={() => { if (longPressTimer.current) { clearTimeout(longPressTimer.current); longPressTimer.current = null; } }}
+                      onMouseLeave={() => { if (longPressTimer.current) { clearTimeout(longPressTimer.current); longPressTimer.current = null; } }}
+                      onDragOver={handleDragOver}
+                      onDrop={(e) => handleDrop(e, day)}>
+                      <span className="cal-cell-num">{day}</span>
+                      {evts.length > 0 && (
+                        <div className="cal-cell-events">
+                          {evts.slice(0, compactView ? 0 : 2).map((ev, ei) => (
+                            <span key={ei} className="cal-cell-ev" title={ev.title}>{ev.title}</span>
+                          ))}
+                          {evts.length > 2 && !compactView && <span className="cal-cell-more">+{evts.length - 2} more</span>}
+                        </div>
+                      )}
+                      {hasNote && evts.length === 0 && <div className="cal-cell-indicators"><span className="cal-cell-dot" /></div>}
+                      {showQuickAdd === day && (
+                        <div className="cal-quick-add" onClick={(e) => e.stopPropagation()}>
+                          <input className="cal-quick-input" placeholder="New event..." value={formData.title}
+                            onChange={(e2) => setFormData({ ...formData, title: e2.target.value })}
+                            onKeyDown={(e2) => { if (e2.key === 'Enter') addEvent(); if (e2.key === 'Escape') setShowQuickAdd(null); }}
+                            autoFocus />
+                          <div className="cal-quick-actions">
+                            <button className="cal-quick-save" onClick={addEvent} disabled={!formData.title.trim()}>Add</button>
+                            <button className="cal-quick-cancel" onClick={() => setShowQuickAdd(null)}>×</button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="cal-nav-bar">
+                <button className="cal-nav-arrow" onClick={() => { const p = addDays(weekStart, -7); setWeekStart(p); persistWeekStart(p); }}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="15 18 9 12 15 6"/></svg>
+                </button>
+                <div className="cal-nav-dots cal-week-dots">
+                  {weekDates.map((d, i) => {
+                    const ds = toDateStr(d.getFullYear(), d.getMonth(), d.getDate());
+                    const evts = allEvents.filter((e) => e.date === ds);
+                    const hasNote = noteDates.some((nd) => nd.getFullYear() === d.getFullYear() && nd.getMonth() === d.getMonth() && nd.getDate() === d.getDate());
+                    const isToday = toDateStr(today.getFullYear(), today.getMonth(), today.getDate()) === ds;
+                    return (
+                      <button key={i} className={`cal-week-day ${isToday ? 'cal-week-day-today' : ''}`} onClick={() => {
+                        setSelectedDate(d.getDate()); setCurrentMonth(d.getMonth()); setCurrentYear(d.getFullYear());
+                      }}>
+                        <span className="cal-week-day-name">{DAYS[d.getDay()]}</span>
+                        <span className="cal-week-day-num">{d.getDate()}</span>
+                        {(hasNote || evts.length > 0) && <span className="cal-week-day-dot" />}
+                      </button>
+                    );
+                  })}
+                </div>
+                <button className="cal-nav-arrow" onClick={() => { const n = addDays(weekStart, 7); setWeekStart(n); persistWeekStart(n); }}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="9 18 15 12 9 6"/></svg>
+                </button>
+              </div>
+
+              <div className="cal-week-timegrid" style={{ minHeight: (endHour - startHour) * hourHeight + 30 }}>
+                <div className="cal-week-timecol">
+                  {Array.from({ length: endHour - startHour + 1 }, (_, i) => (
+                    <div key={i} className="cal-week-timecell" style={{ height: hourHeight }}>
+                      <span className="cal-week-timelabel">{i + startHour > 12 ? `${i + startHour - 12} PM` : i + startHour === 12 ? '12 PM' : `${i + startHour} AM`}</span>
+                    </div>
+                  ))}
+                </div>
+                {weekDates.map((d, i) => {
+                  const ds = toDateStr(d.getFullYear(), d.getMonth(), d.getDate());
+                  const evts = allEvents.filter((e) => e.date === ds);
+                  const notesForDay = notes.filter((n) => {
+                    const nd = parseDateFromNote(n);
+                    return nd && nd.getFullYear() === d.getFullYear() && nd.getMonth() === d.getMonth() && nd.getDate() === d.getDate();
+                  });
+                  const isToday = toDateStr(today.getFullYear(), today.getMonth(), today.getDate()) === ds;
+                  return (
+                    <div key={i} className={`cal-week-daycol ${isToday ? 'cal-week-daycol-today' : ''} ${isWeekend(d.getDay()) ? 'cal-week-daycol-weekend' : ''}`}
+                      onClick={(e) => {
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        const y = e.clientY - rect.top;
+                        const hour = Math.floor(y / hourHeight) + startHour;
+                        const timeStr = `${String(hour).padStart(2, '0')}:00`;
+                        handleWeekSlotClick(ds, timeStr);
+                      }}>
+                      {evts.map((e) => {
+                        const top = getEventTop(e.time, startHour);
+                        const dur = getEventDuration(e);
+                        const h = Math.max(20, (dur / 60) * hourHeight);
+                        return (
+                          <div key={`${e.source}-${e.id}`}
+                            className={`cal-week-slot-event ${isPast(e.date, e.time) ? 'cal-week-slot-past' : ''}`}
+                            style={{ top: top, height: h }}
+                            title={`${e.title} ${e.time ? formatTimeDisplay(e.date, e.time) : ''}`}
+                            draggable
+                            onDragStart={(ev) => handleDragStart(ev, e)}>
+                            <span className="cal-week-slot-time">{e.time ? formatTimeDisplay(e.date, e.time) : ''}</span>
+                            <span className="cal-week-slot-title">{e.title}</span>
+                          </div>
+                        );
+                      })}
+                      {isToday && (
+                        <div className="cal-week-nowline" style={{ top: currentTimePos }} />
+                      )}
+                      {evts.length === 0 && notesForDay.length === 0 && (
+                        <div className="cal-week-daycol-empty">Click to add event</div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
         </div>
 
         {selectedDate && (
-          <aside className="cal-sidebar">
+          <aside className={`cal-sidebar ${selectedDate ? 'cal-sidebar-visible' : ''}`}>
             <div className="cal-sidebar-header">
               <span className="cal-sidebar-date">{selectedDs}</span>
-              <button className="cal-sidebar-close" onClick={() => setSelectedDate(null)}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                  <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-                </svg>
-              </button>
+              <div className="cal-sidebar-header-right">
+                <button className="cal-sidebar-add-event" onClick={() => { setFormData({ ...formData, date: selectedDs }); setShowForm(true); }} title="Add event">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                    <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+                  </svg>
+                </button>
+                <button className="cal-sidebar-close" onClick={() => setSelectedDate(null)}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                    <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                  </svg>
+                </button>
+              </div>
+            </div>
+
+            <div className="cal-sidebar-minimonth">
+              <div className="cal-mini-header">
+                <button className="cal-mini-nav" onClick={() => {
+                  if (sidebarMonth === 0) { setSidebarMonth(11); setSidebarYear((y) => y - 1); }
+                  else setSidebarMonth((m) => m - 1);
+                }}>
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
+                </button>
+                <span className="cal-mini-label">{SHORT_MONTHS[sidebarMonth]} {sidebarYear}</span>
+                <button className="cal-mini-nav" onClick={() => {
+                  if (sidebarMonth === 11) { setSidebarMonth(0); setSidebarYear((y) => y + 1); }
+                  else setSidebarMonth((m) => m + 1);
+                }}>
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="9 18 15 12 9 6"/></svg>
+                </button>
+              </div>
+              <div className="cal-mini-grid">
+                {DAYS.map((d) => <span key={d} className="cal-mini-dayname">{d[0]}</span>)}
+                {Array.from({ length: sidebarFirstDay }).map((_, i) => <span key={`e-${i}`} className="cal-mini-cell cal-mini-empty" />)}
+                {Array.from({ length: sidebarDaysInMonth }, (_, i) => i + 1).map((day) => {
+                  const isSel = selectedDate === day && sidebarMonth === currentMonth && sidebarYear === currentYear;
+                  const isToday = today.getDate() === day && today.getMonth() === sidebarMonth && today.getFullYear() === sidebarYear;
+                  return (
+                    <span key={day}
+                      className={`cal-mini-cell ${isSel ? 'cal-mini-sel' : ''} ${isToday ? 'cal-mini-today' : ''}`}
+                      onClick={() => { setSelectedDate(day); setCurrentMonth(sidebarMonth); setCurrentYear(sidebarYear); }}>
+                      {day}
+                    </span>
+                  );
+                })}
+              </div>
             </div>
 
             {selectedNotes.length > 0 && (
               <div className="cal-sidebar-section">
                 <div className="cal-sidebar-section-title">
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--text3)" strokeWidth="2" strokeLinecap="round">
-                    <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
-                    <polyline points="14 2 14 8 20 8"/>
+                    <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/>
                   </svg>
                   Notes
                 </div>
                 {selectedNotes.map((n) => (
-                  <div key={n.id} className="cal-sidebar-item">{n.title || n.shortSummary?.slice(0, 60)}</div>
+                  <div key={n.id} className="cal-sidebar-item cal-sidebar-item-clickable" onClick={() => navigate('/notes', { state: { focusNoteId: n.id } })}>
+                    <span>{n.title || n.shortSummary?.slice(0, 60)}</span>
+                    <span className="cal-sidebar-item-meta">{n.meetingType} · {n.audioDurationS != null ? n.audioDurationS.toFixed(0) : 0}s</span>
+                  </div>
                 ))}
               </div>
             )}
@@ -368,29 +834,57 @@ export default function CalendarPage({ isGuest }) {
               <div className="cal-sidebar-section">
                 <div className="cal-sidebar-section-title">
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--text3)" strokeWidth="2" strokeLinecap="round">
-                    <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
-                    <line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/>
-                    <line x1="3" y1="10" x2="21" y2="10"/>
+                    <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>
                   </svg>
                   Events
+                  <span className="cal-sidebar-ev-count">{selectedEvts.length}</span>
                 </div>
                 {selectedEvts.map((e) => (
-                  <div key={`${e.source}-${e.id}`} className="cal-sidebar-event">
-                    <div className="cal-sidebar-event-top">
-                      <span className="cal-sidebar-event-title">{e.title}</span>
-                      <div className="cal-sidebar-event-actions">
-                        {e.source === 'google' && <span className="cal-source-chip-sm">G</span>}
-                        {e.source === 'local' && (
-                          <button className="cal-sidebar-delete" onClick={() => deleteEvent(e.id)}>
-                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                              <polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/>
-                            </svg>
-                          </button>
-                        )}
+                  editingEvent?.id === e.id && editingEvent?.source === e.source ? (
+                    <div key={`edit-${e.source}-${e.id}`} className="cal-sidebar-event cal-sidebar-event-editing">
+                      <div className="cal-sidebar-ev-bar" />
+                      <input className="cal-edit-input" value={editForm.title}
+                        onChange={(t) => setEditForm({ ...editForm, title: t.target.value })} />
+                      <input type="time" className="cal-edit-input cal-edit-input-half" value={editForm.time}
+                        onChange={(t) => setEditForm({ ...editForm, time: t.target.value })} />
+                      <textarea className="cal-edit-input cal-edit-textarea" placeholder="Notes" value={editForm.notes}
+                        onChange={(t) => setEditForm({ ...editForm, notes: t.target.value })} />
+                      <div className="cal-edit-actions">
+                        <button className="cal-edit-save" onClick={updateEvent} disabled={!editForm.title.trim()}>Save</button>
+                        <button className="cal-edit-cancel" onClick={cancelEdit}>Cancel</button>
                       </div>
                     </div>
-                    {e.time && <span className="cal-sidebar-event-time">{formatTimeDisplay(e.date, e.time)}</span>}
-                  </div>
+                  ) : (
+                    <div key={`${e.source}-${e.id}`}
+                      className={`cal-sidebar-event ${isPast(e.date, e.time) ? 'cal-sidebar-event-past' : ''}`}>
+                      <div className="cal-sidebar-ev-bar" />
+                      <div className="cal-sidebar-event-top">
+                        <div className="cal-sidebar-event-info">
+                          <span className="cal-sidebar-event-title">{e.title}</span>
+                          {e.time && <span className="cal-sidebar-event-time">{formatTimeDisplay(e.date, e.time)}</span>}
+                        </div>
+                        <div className="cal-sidebar-event-actions">
+                          {e.source === 'google' && <span className="cal-source-chip-sm">G</span>}
+                          <button className="cal-sidebar-edit" onClick={() => startEditEvent(e)} title="Edit">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                              <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                            </svg>
+                          </button>
+                          {e.source === 'local' && (
+                            <button className="cal-sidebar-delete" onClick={() => deleteEvent(e.id)} title="Delete">
+                              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                                <polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/>
+                              </svg>
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                      {e.notes && <span className="cal-sidebar-event-notes">{e.notes}</span>}
+                      {linkedNotes(e).length > 0 && (
+                        <span className="cal-sidebar-linked">Linked to {linkedNotes(e).length} note(s)</span>
+                      )}
+                    </div>
+                  )
                 ))}
               </div>
             )}
@@ -401,6 +895,7 @@ export default function CalendarPage({ isGuest }) {
                   <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
                 </svg>
                 <p>Nothing scheduled for this day</p>
+                <button className="cal-sidebar-add-btn" onClick={() => { setFormData({ ...formData, date: selectedDs }); setShowForm(true); }}>Add Event</button>
               </div>
             )}
           </aside>

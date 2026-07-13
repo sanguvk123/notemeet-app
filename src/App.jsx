@@ -6,6 +6,7 @@ import HomePage from './pages/HomePage';
 import NotesPage from './pages/NotesPage';
 import CalendarPage from './pages/CalendarPage';
 import LoginPage from './pages/LoginPage';
+import ProfileModal from './components/ProfileModal';
 
 let isTauriEnv = null;
 async function detectTauri() {
@@ -20,8 +21,14 @@ async function detectTauri() {
 }
 
 function Layout({ email, isGuest, onSignOut, onSignIn }) {
+  const [showProfile, setShowProfile] = useState(false);
+
   return (
     <div className="app">
+      {showProfile && (
+        <ProfileModal email={email} isGuest={isGuest} onClose={() => setShowProfile(false)}
+          onSignOut={() => { setShowProfile(false); onSignOut(); }} />
+      )}
       <nav className="nav-sidebar">
         <div className="nav-header">
           <svg width="28" height="28" viewBox="0 0 100 100" fill="none">
@@ -59,19 +66,16 @@ function Layout({ email, isGuest, onSignOut, onSignIn }) {
           </NavLink>
         </div>
         <div className="nav-footer">
-          {isGuest ? (
-            <button className="nav-signin-btn" onClick={onSignIn} title="Sign in with Google">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
-                <path d="M7 11V7a5 5 0 0110 0v4"/>
+          <button className="nav-profile-btn" onClick={() => setShowProfile(true)} title="Profile & Settings">
+            {isGuest ? (
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/>
+                <circle cx="12" cy="7" r="4"/>
               </svg>
-              <span>Sign In</span>
-            </button>
-          ) : (
-            <div className="nav-user" title={email}>
+            ) : (
               <span className="nav-user-avatar">{email.charAt(0).toUpperCase()}</span>
-            </div>
-          )}
+            )}
+          </button>
           <button className="mini-launch-btn" onClick={() => invoke('create_mini_window')} title="Open Mini Recorder">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
@@ -79,15 +83,6 @@ function Layout({ email, isGuest, onSignOut, onSignIn }) {
               <line x1="12" y1="17" x2="12" y2="21"/>
             </svg>
           </button>
-          {!isGuest && (
-            <button className="nav-signout-btn" onClick={onSignOut} title="Sign out">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/>
-                <polyline points="16 17 21 12 16 7"/>
-                <line x1="21" y1="12" x2="9" y2="12"/>
-              </svg>
-            </button>
-          )}
         </div>
       </nav>
       <div className="page-area">

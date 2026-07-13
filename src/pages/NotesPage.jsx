@@ -1,4 +1,5 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useMemo, useEffect } from 'react';
+import { useLocation } from 'react-router-dom';
 import { invoke } from '@tauri-apps/api/tauri';
 import { useNotes } from '../context/NoteContext';
 import { groupByDate, formatTime } from '../utils';
@@ -11,6 +12,52 @@ const roles = [
   { value: 'interview', label: 'Interview' },
   { value: 'other', label: 'Other' },
 ];
+
+const typeIcons = {
+  meeting: 'M',
+  standup: 'S',
+  client: 'C',
+  interview: 'I',
+  other: 'O',
+};
+
+function noteToMarkdown(note) {
+  const lines = [];
+  lines.push(`# ${note.title}`);
+  lines.push('');
+  lines.push(`**Date:** ${new Date(note.date).toLocaleString('en-IN')}`);
+  lines.push(`**Type:** ${note.meetingType}`);
+  lines.push(`**Duration:** ${note.audioDurationS.toFixed(0)}s`);
+  if (note.speakers?.length) lines.push(`**Participants:** ${note.speakers.join(', ')}`);
+  if (note.tone) lines.push(`**Tone:** ${note.tone}`);
+  lines.push('');
+  if (note.shortSummary) {
+    lines.push('## Summary');
+    lines.push(note.shortSummary);
+    lines.push('');
+  }
+  if (note.fullSummary) {
+    lines.push('## Notes');
+    lines.push(note.fullSummary);
+    lines.push('');
+  }
+  if (note.actionItems?.length) {
+    lines.push('## Action Items');
+    note.actionItems.forEach((item) => lines.push(`- [ ] ${item}`));
+    lines.push('');
+  }
+  if (note.promises?.length) {
+    lines.push('## Promises & Commitments');
+    note.promises.forEach((item) => lines.push(`- ${item}`));
+    lines.push('');
+  }
+  if (note.transcript) {
+    lines.push('## Transcript');
+    lines.push(note.transcript);
+    lines.push('');
+  }
+  return lines.join('\n');
+}
 
 function EditField({ value, onChange, isEditing, multiline }) {
   if (!isEditing) return multiline
@@ -48,7 +95,42 @@ export default function NotesPage() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [editFields, setEditFields] = useState({ title: '', shortSummary: '', fullSummary: '', actionItems: '' });
   const [title, setTitle] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [filterType, setFilterType] = useState('');
   const audioRef = useRef(null);
+
+  const location = useLocation();
+
+  useEffect(() => {
+    if (location.state?.focusNoteId && notes.length > 0) {
+      const note = notes.find((n) => n.id === location.state.focusNoteId);
+      if (note) {
+        setSelectedNote(note);
+        setShowChat(false);
+        setShowDeleteConfirm(false);
+      }
+      window.history.replaceState({}, '');
+    }
+  }, [location.state?.focusNoteId, notes]);
+
+  const filteredNotes = useMemo(() => {
+    let result = notes;
+    if (filterType) {
+      result = result.filter((n) => n.meetingType === filterType);
+    }
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      result = result.filter(
+        (n) =>
+          n.title.toLowerCase().includes(q) ||
+          n.shortSummary.toLowerCase().includes(q) ||
+          n.fullSummary.toLowerCase().includes(q) ||
+          n.transcript.toLowerCase().includes(q) ||
+          n.actionItems?.some((a) => a.toLowerCase().includes(q))
+      );
+    }
+    return result;
+  }, [notes, searchQuery, filterType]);
 
   const playAudio = useCallback(async (filePath, noteId) => {
     if (playingNoteId === noteId && audioRef.current) {
@@ -133,7 +215,35 @@ export default function NotesPage() {
     setShowDeleteConfirm(false);
   };
 
-  const groups = groupByDate(notes);
+  const exportNote = async (note) => {
+    const md = noteToMarkdown(note);
+    try {
+      const { save } = await import('@tauri-apps/api/dialog');
+      const path = await save({
+        defaultPath: `${note.title.replace(/[^a-zA-Z0-9 ]/g, '')}.md`,
+        filters: [{ name: 'Markdown', extensions: ['md'] }],
+      });
+      if (path) {
+        await invoke('write_text_file', { path, content: md });
+      }
+    } catch {
+      const blob = new Blob([md], { type: 'text/markdown' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${note.title.replace(/[^a-zA-Z0-9 ]/g, '')}.md`;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+  };
+
+  const countByType = useMemo(() => {
+    const map = {};
+    notes.forEach((n) => { map[n.meetingType] = (map[n.meetingType] || 0) + 1; });
+    return map;
+  }, [notes]);
+
+  const groups = groupByDate(filteredNotes);
 
   return (
     <>
@@ -179,8 +289,34 @@ export default function NotesPage() {
           )}
         </div>
 
+        <div className="note-search-area">
+          <div className="note-search-row">
+            <svg className="note-search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text3)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+            </svg>
+            <input className="note-search-input" type="text" placeholder="Search notes..." value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)} />
+            {searchQuery && (
+              <button className="note-search-clear" onClick={() => setSearchQuery('')}>×</button>
+            )}
+          </div>
+          <div className="note-type-chips">
+            <button className={`note-type-chip ${!filterType ? 'active' : ''}`} onClick={() => setFilterType('')}>
+              All <span className="chip-count">{notes.length}</span>
+            </button>
+            {roles.map((r) => (
+              <button key={r.value} className={`note-type-chip ${filterType === r.value ? 'active' : ''}`}
+                onClick={() => setFilterType(filterType === r.value ? '' : r.value)}>
+                <span className="chip-icon">{typeIcons[r.value]}</span>
+                {r.label}
+                <span className="chip-count">{countByType[r.value] || 0}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+
         <div className="notes-list">
-          {notes.length === 0 && !isRecording && (
+          {filteredNotes.length === 0 && !isRecording && (
             <div className="empty-notes">
               <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--text3)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z"/>
@@ -188,7 +324,7 @@ export default function NotesPage() {
                 <line x1="12" y1="19" x2="12" y2="23"/>
                 <line x1="8" y1="23" x2="16" y2="23"/>
               </svg>
-              <p>Press Record to start your first meeting note</p>
+              <p>{searchQuery || filterType ? 'No notes match your search' : 'Press Record to start your first meeting note'}</p>
             </div>
           )}
           {Object.entries(groups).map(([dateLabel, dateNotes]) => (
@@ -200,7 +336,7 @@ export default function NotesPage() {
                   className={`note-item ${selectedNote?.id === note.id ? 'active' : ''}`}
                   onClick={() => handleSelectNote(note)}
                 >
-                  <div className="note-item-title">{note.shortSummary?.slice(0, 60) || note.title}</div>
+                  <div className="note-item-title">{note.title}</div>
                   <div className="note-item-meta">
                     <span>{note.meetingType}</span>
                     <span>{note.audioDurationS.toFixed(0)}s</span>
@@ -239,28 +375,62 @@ export default function NotesPage() {
               <div className="detail-actions">
                 {selectedNote.audioFile && (
                   <button
-                    className={`play-btn ${playingNoteId === selectedNote.id ? 'playing' : ''}`}
+                    className={`icon-btn ${playingNoteId === selectedNote.id ? 'playing' : ''}`}
                     onClick={() => playAudio(selectedNote.audioFile, selectedNote.id)}
+                    title={playingNoteId === selectedNote.id ? 'Stop' : 'Play'}
                   >
-                    {playingNoteId === selectedNote.id ? 'Stop' : 'Play'}
+                    {playingNoteId === selectedNote.id ? (
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                        <rect x="6" y="4" width="4" height="16"/>
+                        <rect x="14" y="4" width="4" height="16"/>
+                      </svg>
+                    ) : (
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                        <polygon points="5 3 19 12 5 21 5 3"/>
+                      </svg>
+                    )}
+                  </button>
+                )}
+                {!editing && (
+                  <button className="icon-btn" onClick={() => exportNote(selectedNote)} title="Export as Markdown">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                      <polyline points="7 10 12 15 17 10"/>
+                      <line x1="12" y1="15" x2="12" y2="3"/>
+                    </svg>
                   </button>
                 )}
                 {editing ? (
                   <>
-                    <button className="play-btn" onClick={saveEdit} disabled={saving}>
+                    <button className="action-btn" onClick={saveEdit} disabled={saving}>
                       {saving ? 'Saving...' : 'Save'}
                     </button>
-                    <button className="chat-btn" onClick={cancelEdit}>Cancel</button>
+                    <button className="action-btn" onClick={cancelEdit}>Cancel</button>
                   </>
                 ) : (
                   <>
-                    <button className="play-btn" onClick={enterEditMode}>Edit</button>
-                    <button className="chat-btn" onClick={() => setShowDeleteConfirm(true)}>Delete</button>
+                    <button className="icon-btn" onClick={enterEditMode} title="Edit note">
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                        <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                      </svg>
+                    </button>
+                    <button className="icon-btn delete-btn" onClick={() => setShowDeleteConfirm(true)} title="Delete note">
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="3 6 5 6 21 6"/>
+                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+                        <line x1="10" y1="11" x2="10" y2="17"/>
+                        <line x1="14" y1="11" x2="14" y2="17"/>
+                      </svg>
+                    </button>
                     <button
-                      className={`chat-btn ${showChat ? 'active' : ''}`}
+                      className={`icon-btn ${showChat ? 'active' : ''}`}
                       onClick={() => setShowChat(!showChat)}
+                      title="Ask AI"
                     >
-                      Ask AI
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                      </svg>
                     </button>
                   </>
                 )}

@@ -163,6 +163,11 @@ fn read_audio_file(path: String) -> Result<Vec<u8>, String> {
 }
 
 #[tauri::command]
+fn write_text_file(path: String, content: String) -> Result<(), String> {
+    std::fs::write(&path, &content).map_err(|e| format!("Write error: {}", e))
+}
+
+#[tauri::command]
 fn ask_about_note(note_json: String, question: String, history: Vec<llm::ChatMessage>) -> Result<String, String> {
     llm::chat_about_note(&note_json, &question, &history)
 }
@@ -326,6 +331,7 @@ fn main() {
             update_note,
             delete_note,
             read_audio_file,
+            write_text_file,
             ask_about_note,
             ask_all_notes,
             add_calendar_event,

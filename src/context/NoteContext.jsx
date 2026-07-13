@@ -60,6 +60,7 @@ export function NoteProvider({ children }) {
       await invoke('start_recording', { meetingType: mt || meetingType });
     } catch (e) {
       console.error(e);
+      setIsRecording(false);
       setStatus('idle');
     }
   };
