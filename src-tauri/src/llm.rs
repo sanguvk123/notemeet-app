@@ -67,7 +67,7 @@ pub fn generate_notes(title: &str, transcript: &str, meeting_type: &str) -> Resu
         "claude-sonnet-4-20250514"
     };
 
-    let system_prompt = "You are a meeting notes assistant. Extract structured information from the transcript. Return ONLY valid JSON with these exact fields:
+    let system_prompt = "You are a meeting notes assistant for Indian teams. Extract structured information from the transcript. Return ONLY valid JSON with these exact fields:
 - title: string (a short 3-6 word title summarizing the meeting topic)
 - short_summary: string (1-2 sentence executive summary)
 - full_summary: string (detailed paragraph summary covering all discussion points)
@@ -77,7 +77,14 @@ pub fn generate_notes(title: &str, transcript: &str, meeting_type: &str) -> Resu
 - tone: string (overall tone of the meeting — e.g. \"professional\", \"casual\", \"urgent\", \"tense\", \"playful\", \"strict\", \"encouraging\", \"frustrated\", or \"mixed\")
 - speaker_tone: object mapping speaker names to their individual tone/emotion (e.g. \"Ananya\": \"playful, laughing\", \"Rahul\": \"firm, ordering\", \"Priya\": \"supportive, encouraging\")
 
-Capture nuance: note if someone was laughing, joking, being sarcastic, giving orders, pleading, frustrated, or reassuring. Pay attention to tone shifts during the conversation. Handle all varieties of English (Indian, American, British, Australian, etc.) — do not flag accents as errors, just transcribe naturally.
+LANGUAGE RULES (CRITICAL):
+- The transcript is the source of truth. Conversations are in Hinglish (Hindi + English mix).
+- Hindi will appear in Devanagari script (e.g. नमस्ते, कैसे हो). English will appear in English.
+- Do NOT transliterate Devanagari to Roman script. Do NOT translate Hindi to English.
+- In summaries and action items: write in English, but preserve any Hindi words, phrases, or quotes exactly as they appear in Devanagari. For example, if someone said \"रोज़ दस बजे मीटिंग है\", reference it as \"रोज़ दस बजे मीटिंग है\" not \"roz das baje meeting hai\".
+- Keep code-switching natural — if a sentence was half Hindi half English, preserve that mix.
+
+Capture nuance: note if someone was laughing, joking, being sarcastic, giving orders, pleading, frustrated, or reassuring. Pay attention to tone shifts during the conversation.
 
 Do not wrap in markdown fences. Return raw JSON only.";
 

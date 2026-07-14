@@ -8,6 +8,8 @@ use tauri::Manager;
 macro_rules! log { ($($t:tt)*) => { eprintln!("[NoteMeet {}] {}", Local::now().format("%H:%M:%S%.3f"), format!($($t)*)) } }
 
 struct SendStream(cpal::Stream);
+// SAFETY: The stream is only moved once into the AudioRecorder,
+// dropped on stop(), and never accessed from any other thread.
 unsafe impl Send for SendStream {}
 
 pub struct AudioRecorder {
@@ -15,6 +17,7 @@ pub struct AudioRecorder {
     _stream: SendStream,
     sample_rate: u32,
     started_at: chrono::DateTime<Local>,
+    paused: Arc<AtomicBool>,
 }
 
 impl AudioRecorder {
@@ -38,15 +41,17 @@ impl AudioRecorder {
         let collected = Arc::new(Mutex::new(Vec::new()));
         let c2 = collected.clone();
         let started_at = Local::now();
+        let paused = Arc::new(AtomicBool::new(false));
+        let p2 = paused.clone();
 
         let stream = device
             .build_input_stream(
                 &config,
                 move |data: &[f32], _: &_| {
+                    if p2.load(Ordering::Relaxed) { return; }
                     if let Ok(mut buf) = c2.lock() {
                         let prev = buf.len();
                         buf.extend(data.iter().map(|&s| (s * i16::MAX as f32) as i16));
-                        // Log buffer growth periodically
                         if buf.len() / sample_rate as usize > 0
                             && (buf.len() - prev) > sample_rate as usize * 10
                         {
@@ -69,19 +74,20 @@ impl AudioRecorder {
             _stream: SendStream(stream),
             sample_rate,
             started_at,
+            paused,
         })
     }
 
     pub fn stop(self) -> Result<(Vec<i16>, u32, chrono::DateTime<Local>), String> {
         let stopped_at = Local::now();
         drop(self._stream);
-        let data = self.collected.lock().unwrap().clone();
+        self.paused.store(false, Ordering::Relaxed);
+        let data = self.collected.lock().unwrap().drain(..).collect::<Vec<_>>();
         let dur_s = data.len() as f64 / self.sample_rate as f64;
 
         log!("Recording stopped at {} (ran {:.1}s)", stopped_at.format("%H:%M:%S"), dur_s);
         log!("Captured {} samples @ {} Hz (RMS check below)", data.len(), self.sample_rate);
 
-        // RMS
         let rms = if data.is_empty() {
             0.0
         } else {
@@ -94,7 +100,6 @@ impl AudioRecorder {
             log!("WARNING: No audio data captured!");
             Ok((vec![0i16; self.sample_rate as usize * 2], self.sample_rate, self.started_at))
         } else {
-            // Log min/max for debugging
             let min = data.iter().min().unwrap_or(&0);
             let max = data.iter().max().unwrap_or(&0);
             log!("Audio range: {} .. {}", min, max);
@@ -102,13 +107,26 @@ impl AudioRecorder {
         }
     }
 
+    pub fn pause(&self) {
+        self.paused.store(true, Ordering::Relaxed);
+        log!("Recording paused");
+    }
+
+    pub fn resume(&self) {
+        self.paused.store(false, Ordering::Relaxed);
+        log!("Recording resumed");
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.paused.load(Ordering::Relaxed)
+    }
+
     pub fn sample_rate(&self) -> u32 {
         self.sample_rate
     }
 
-    /// Returns new samples since `since` and updates `since` to current buffer length.
     pub fn drain_since(&self, since: &mut usize) -> Vec<i16> {
-        let buf = self.collected.lock().unwrap();
+        let mut buf = self.collected.lock().unwrap();
         if *since >= buf.len() {
             return Vec::new();
         }
@@ -119,6 +137,22 @@ impl AudioRecorder {
 
     pub fn buffered_samples(&self) -> usize {
         self.collected.lock().map(|b| b.len()).unwrap_or(0)
+    }
+
+    pub fn current_level(&self) -> f32 {
+        if self.is_paused() { return 0.0; }
+        let buf = self.collected.lock().unwrap();
+        let len = buf.len();
+        if len == 0 {
+            return 0.0;
+        }
+        let window = (self.sample_rate as usize / 10).min(len);
+        let start = len - window;
+        let sum_sq: f64 = buf[start..]
+            .iter()
+            .map(|&s| (s as f64 / i16::MAX as f64).powi(2))
+            .sum();
+        (sum_sq / window as f64).sqrt() as f32
     }
 }
 
@@ -134,7 +168,7 @@ pub fn spawn_live_transcriber(
     let min_chunk = (sample_rate as usize) * 2; // 2 seconds minimum per chunk
     let model_path = std::env::var("WHISPER_MODEL_PATH").unwrap_or_else(|_| {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/sangameshk".to_string());
-        format!("{}/notemeet-app/src-tauri/whisper/models/ggml-base.bin", home)
+        format!("{}/notemeet-app/src-tauri/whisper/models/ggml-medium.bin", home)
     });
 
     thread::spawn(move || {
@@ -184,6 +218,8 @@ pub fn spawn_live_transcriber(
                 .arg(&model_path)
                 .arg("-f")
                 .arg(wav_path)
+                .arg("-l")
+                .arg("auto")
                 .output();
 
             if let Ok(out) = output {

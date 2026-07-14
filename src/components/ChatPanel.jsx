@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/tauri';
 
 export default function ChatPanel({ note, onClose }) {
@@ -13,7 +13,7 @@ export default function ChatPanel({ note, onClose }) {
     }
   }, [messages]);
 
-  const sendMessage = async () => {
+  const sendMessage = useCallback(async () => {
     if (!input.trim() || loading) return;
     const userMsg = { role: 'user', content: input };
     setMessages((prev) => [...prev, userMsg]);
@@ -29,7 +29,7 @@ export default function ChatPanel({ note, onClose }) {
       setMessages((prev) => [...prev, { role: 'assistant', content: `Error: ${e}` }]);
     }
     setLoading(false);
-  };
+  }, [input, loading, messages, note]);
 
   return (
     <div className="chat-panel">

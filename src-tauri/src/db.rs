@@ -1,8 +1,21 @@
 use crate::Note;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
+
+fn to_json(v: &[String]) -> String {
+    serde_json::to_string(v).unwrap_or_else(|_| "[]".to_string())
+}
+
+fn parse_json(s: &str) -> Vec<String> {
+    serde_json::from_str(s).unwrap_or_default()
+}
+
+fn parse_map(s: &str) -> HashMap<String, String> {
+    serde_json::from_str(s).unwrap_or_default()
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -63,12 +76,25 @@ impl Database {
                     time   TEXT NOT NULL DEFAULT '',
                     notes  TEXT NOT NULL DEFAULT ''
                 );
+                CREATE INDEX IF NOT EXISTS idx_notes_created_at ON notes(created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_calendar_events_date ON calendar_events(date, time);
                 PRAGMA user_version = 1;",
             )
             .map_err(|e| format!("DB init: {}", e))?;
             eprintln!("[NoteMeet] DB migrated to version 1");
-        } else {
-            eprintln!("[NoteMeet] DB schema version {} — no migration needed", version);
+        }
+
+        if version < 2 {
+            let _ = conn.execute_batch(
+                "CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
+                    id UNINDEXED, title, short_summary, full_summary, transcript, action_items_text,
+                    content='notes', content_rowid='rowid'
+                );
+                INSERT INTO notes_fts(rowid, id, title, short_summary, full_summary, transcript, action_items_text)
+                SELECT rowid, id, title, short_summary, full_summary, transcript, action_items FROM notes;
+                PRAGMA user_version = 2;"
+            );
+            eprintln!("[NoteMeet] DB migrated to version 2 (FTS5)");
         }
 
         eprintln!("[NoteMeet] DB initialized");
@@ -79,10 +105,6 @@ impl Database {
 
     pub fn save_note(&self, note: &Note) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|e| format!("DB lock: {}", e))?;
-
-        let to_json = |v: &Vec<String>| -> String {
-            serde_json::to_string(v).unwrap_or_else(|_| "[]".to_string())
-        };
 
         let speaker_tone_json =
             serde_json::to_string(&note.speaker_tone).unwrap_or_else(|_| "{}".to_string());
@@ -109,7 +131,63 @@ impl Database {
         )
         .map_err(|e| format!("DB insert: {}", e))?;
 
+        let rowid = conn.last_insert_rowid();
+        let _ = conn.execute(
+            "INSERT OR REPLACE INTO notes_fts(rowid, id, title, short_summary, full_summary, transcript, action_items_text)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![
+                rowid,
+                note.id,
+                note.title,
+                note.short_summary,
+                note.full_summary,
+                note.transcript,
+                to_json(&note.action_items),
+            ],
+        );
+
         Ok(())
+    }
+
+    pub fn search_notes(&self, query: &str, limit: usize) -> Result<Vec<Note>, String> {
+        let conn = self.conn.lock().map_err(|e| format!("DB lock: {}", e))?;
+        let fts_query = query.split_whitespace().map(|w| format!("\"{}\"", w)).collect::<Vec<_>>().join(" OR ");
+        let mut stmt = conn
+            .prepare(&format!(
+                "SELECT n.id, n.title, n.date, n.short_summary, n.full_summary, n.action_items, n.promises, n.speakers, n.tone, n.speaker_tone, n.transcript, n.meeting_type, n.audio_file, n.audio_duration_s
+                 FROM notes n JOIN notes_fts f ON n.id = f.id
+                 WHERE notes_fts MATCH ?1
+                 ORDER BY rank
+                 LIMIT ?2"
+            ))
+            .map_err(|e| format!("DB search prepare: {}", e))?;
+
+        let notes = stmt
+            .query_map(rusqlite::params![fts_query, limit as i64], |row| {
+                Ok(Note {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                    date: row.get(2)?,
+                    short_summary: row.get(3)?,
+                    full_summary: row.get(4)?,
+                    action_items: parse_json(&row.get::<_, String>(5)?),
+                    promises: parse_json(&row.get::<_, String>(6)?),
+                    speakers: parse_json(&row.get::<_, String>(7)?),
+                    tone: row.get(8)?,
+                    speaker_tone: parse_map(&row.get::<_, String>(9)?),
+                    transcript: row.get(10)?,
+                    meeting_type: row.get(11)?,
+                    audio_file: row.get(12)?,
+                    audio_duration_s: row.get(13)?,
+                })
+            })
+            .map_err(|e| format!("DB search query: {}", e))?;
+
+        let mut result = Vec::new();
+        for note in notes {
+            result.push(note.map_err(|e| format!("DB search row: {}", e))?);
+        }
+        Ok(result)
     }
 
     pub fn load_notes(&self) -> Result<Vec<Note>, String> {
@@ -120,13 +198,6 @@ impl Database {
                  FROM notes ORDER BY created_at DESC",
             )
             .map_err(|e| format!("DB prepare: {}", e))?;
-
-        let parse_json = |s: &str| -> Vec<String> {
-            serde_json::from_str(s).unwrap_or_default()
-        };
-        let parse_map = |s: &str| -> std::collections::HashMap<String, String> {
-            serde_json::from_str(s).unwrap_or_default()
-        };
 
         let notes = stmt
             .query_map([], |row| {
@@ -154,6 +225,46 @@ impl Database {
             result.push(note.map_err(|e| format!("DB row: {}", e))?);
         }
 
+        Ok(result)
+    }
+
+    pub fn load_notes_by_ids(&self, ids: &[String]) -> Result<Vec<Note>, String> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let conn = self.conn.lock().map_err(|e| format!("DB lock: {}", e))?;
+        let placeholders: Vec<String> = ids.iter().enumerate().map(|(i, _)| format!("?{}", i + 1)).collect();
+        let sql = format!(
+            "SELECT id, title, date, short_summary, full_summary, action_items, promises, speakers, tone, speaker_tone, transcript, meeting_type, audio_file, audio_duration_s
+             FROM notes WHERE id IN ({}) ORDER BY created_at DESC",
+            placeholders.join(",")
+        );
+        let mut stmt = conn.prepare(&sql).map_err(|e| format!("DB prepare: {}", e))?;
+        let params: Vec<&dyn rusqlite::types::ToSql> = ids.iter().map(|s| s as &dyn rusqlite::types::ToSql).collect();
+        let notes = stmt
+            .query_map(params.as_slice(), |row| {
+                Ok(Note {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                    date: row.get(2)?,
+                    short_summary: row.get(3)?,
+                    full_summary: row.get(4)?,
+                    action_items: parse_json(&row.get::<_, String>(5)?),
+                    promises: parse_json(&row.get::<_, String>(6)?),
+                    speakers: parse_json(&row.get::<_, String>(7)?),
+                    tone: row.get(8)?,
+                    speaker_tone: parse_map(&row.get::<_, String>(9)?),
+                    transcript: row.get(10)?,
+                    meeting_type: row.get(11)?,
+                    audio_file: row.get(12)?,
+                    audio_duration_s: row.get(13)?,
+                })
+            })
+            .map_err(|e| format!("DB query: {}", e))?;
+        let mut result = Vec::new();
+        for note in notes {
+            result.push(note.map_err(|e| format!("DB row: {}", e))?);
+        }
         Ok(result)
     }
 
@@ -195,10 +306,6 @@ impl Database {
     pub fn update_note(&self, note: &Note) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|e| format!("DB lock: {}", e))?;
 
-        let to_json = |v: &Vec<String>| -> String {
-            serde_json::to_string(v).unwrap_or_else(|_| "[]".to_string())
-        };
-
         let speaker_tone_json =
             serde_json::to_string(&note.speaker_tone).unwrap_or_else(|_| "{}".to_string());
 
@@ -222,13 +329,35 @@ impl Database {
         )
         .map_err(|e| format!("DB update note: {}", e))?;
 
+        let rowid: i64 = conn.query_row(
+            "SELECT rowid FROM notes WHERE id=?1", rusqlite::params![note.id],
+            |row| row.get(0),
+        ).unwrap_or(0);
+        let _ = conn.execute(
+            "UPDATE notes_fts SET id=?2, title=?3, short_summary=?4, full_summary=?5, transcript=?6, action_items_text=?7 WHERE rowid=?1",
+            rusqlite::params![
+                rowid,
+                note.id,
+                note.title,
+                note.short_summary,
+                note.full_summary,
+                note.transcript,
+                to_json(&note.action_items),
+            ],
+        );
+
         Ok(())
     }
 
     pub fn delete_note(&self, id: &str) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|e| format!("DB lock: {}", e))?;
+        let rowid: i64 = conn.query_row(
+            "SELECT rowid FROM notes WHERE id=?1", rusqlite::params![id],
+            |row| row.get(0),
+        ).unwrap_or(0);
         conn.execute("DELETE FROM notes WHERE id = ?1", rusqlite::params![id])
             .map_err(|e| format!("DB delete note: {}", e))?;
+        let _ = conn.execute("DELETE FROM notes_fts WHERE rowid = ?1", rusqlite::params![rowid]);
         Ok(())
     }
 

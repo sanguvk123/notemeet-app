@@ -64,7 +64,7 @@ pub fn transcribe(audio_data: &[i16], sample_rate: u32) -> Result<String, String
 
     let model_path = std::env::var("WHISPER_MODEL_PATH").unwrap_or_else(|_| {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/sangameshk".to_string());
-        format!("{}/notemeet-app/src-tauri/whisper/models/ggml-base.bin", home)
+        format!("{}/notemeet-app/src-tauri/whisper/models/ggml-medium.bin", home)
     });
     log!("whisper model: {}", model_path);
 
@@ -78,6 +78,8 @@ pub fn transcribe(audio_data: &[i16], sample_rate: u32) -> Result<String, String
         .arg(&model_path)
         .arg("-f")
         .arg(wav_path)
+        .arg("-l")
+        .arg("auto")
         .output()
         .map_err(|e| format!("whisper-cli not found: {}", e))?;
 

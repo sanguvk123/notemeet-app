@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { invoke } from '@tauri-apps/api/tauri';
 import { useNotes } from '../context/NoteContext';
@@ -325,49 +325,69 @@ export default function CalendarPage({ isGuest }) {
   useEffect(() => { persistMonth(currentMonth, currentYear); }, [currentMonth, currentYear]);
   useEffect(() => { if (selectedDate) { setSidebarMonth(currentMonth); setSidebarYear(currentYear); } }, [selectedDate]);
 
-  const noteDates = notes.map(parseDateFromNote).filter(Boolean);
-  const daysInMonth = getDaysInMonth(currentYear, currentMonth);
-  const firstDay = getFirstDayOfMonth(currentYear, currentMonth);
+  const noteDates = useMemo(() =>
+    notes.map(parseDateFromNote).filter(Boolean),
+  [notes]);
+  const daysInMonth = useMemo(() => getDaysInMonth(currentYear, currentMonth), [currentYear, currentMonth]);
+  const firstDay = useMemo(() => getFirstDayOfMonth(currentYear, currentMonth), [currentYear, currentMonth]);
 
-  const allEvents = [
+  const allEvents = useMemo(() => [
     ...localEvents.map((e) => ({ ...e, source: 'local' })),
     ...googleEvents.map((e) => ({ ...e, source: 'google' })),
-  ];
+  ], [localEvents, googleEvents]);
+
+  const eventsByDate = useMemo(() => {
+    const map = {};
+    for (const e of allEvents) {
+      if (!map[e.date]) map[e.date] = [];
+      map[e.date].push(e);
+    }
+    return map;
+  }, [allEvents]);
 
   const dayEvents = (day) => {
     const ds = toDateStr(currentYear, currentMonth, day);
-    return allEvents.filter((e) => e.date === ds);
+    return eventsByDate[ds] || [];
   };
 
   const dayHasNote = (day) =>
     noteDates.some((d) => d.getFullYear() === currentYear && d.getMonth() === currentMonth && d.getDate() === day);
 
+  const today = useMemo(() => new Date(), []);
+
   function todayStr() { const d = new Date(); return toDateStr(d.getFullYear(), d.getMonth(), d.getDate()); }
   function nowStr() { const d = new Date(); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; }
 
-  const upcoming = [...allEvents]
-    .filter((e) => {
-      if (e.date > todayStr()) return true;
-      if (e.date < todayStr()) return false;
-      if (!e.time) return true;
-      return e.time >= nowStr();
-    })
-    .sort((a, b) => (a.date || '').localeCompare(b.date || '') || (a.time || '').localeCompare(b.time || ''));
+  const upcoming = useMemo(() =>
+    [...allEvents]
+      .filter((e) => {
+        const ts = todayStr();
+        if (e.date > ts) return true;
+        if (e.date < ts) return false;
+        if (!e.time) return true;
+        return e.time >= nowStr();
+      })
+      .sort((a, b) => (a.date || '').localeCompare(b.date || '') || (a.time || '').localeCompare(b.time || '')),
+  [allEvents]);
 
-  const prepareEvents = upcoming.filter((e) => {
-    const eventDate = new Date(e.date + 'T' + (e.time || '00:00'));
-    const diffMs = eventDate.getTime() - Date.now();
-    return diffMs > 0 && diffMs <= 3600000;
-  });
+  const prepareEvents = useMemo(() =>
+    upcoming.filter((e) => {
+      const eventDate = new Date(e.date + 'T' + (e.time || '00:00'));
+      const diffMs = eventDate.getTime() - Date.now();
+      return diffMs > 0 && diffMs <= 3600000;
+    }),
+  [upcoming]);
 
   const selectedDs = selectedDate ? toDateStr(currentYear, currentMonth, selectedDate) : null;
-  const selectedEvts = selectedDs ? allEvents.filter((e) => e.date === selectedDs) : [];
-  const selectedNotes = selectedDs ? notes.filter((n) => {
-    const d = parseDateFromNote(n);
-    return d && d.getFullYear() === currentYear && d.getMonth() === currentMonth && d.getDate() === selectedDate;
-  }) : [];
-
-  const today = new Date();
+  const selectedEvts = useMemo(() =>
+    selectedDs ? (eventsByDate[selectedDs] || []) : [],
+  [selectedDs, eventsByDate]);
+  const selectedNotes = useMemo(() =>
+    selectedDs ? notes.filter((n) => {
+      const d = parseDateFromNote(n);
+      return d && d.getFullYear() === currentYear && d.getMonth() === currentMonth && d.getDate() === selectedDate;
+    }) : [],
+  [selectedDs, notes, currentYear, currentMonth, selectedDate]);
   const isCurrentMonth = today.getFullYear() === currentYear && today.getMonth() === currentMonth;
   const weekDates = getWeekDates(weekStart);
 
@@ -446,13 +466,24 @@ export default function CalendarPage({ isGuest }) {
     return () => clearInterval(id);
   }, []);
 
-  const linkedNotes = (event) => {
-    if (selectedDate == null) return [];
-    return notes.filter((n) => {
+  const linkedNotesMap = useMemo(() => {
+    if (selectedDate == null) return {};
+    const map = {};
+    for (const n of notes) {
       const nd = parseDateFromNote(n);
-      return nd && nd.getFullYear() === currentYear && nd.getMonth() === currentMonth && nd.getDate() === selectedDate && titleMatchesEvent(n, event);
-    });
-  };
+      if (nd && nd.getFullYear() === currentYear && nd.getMonth() === currentMonth && nd.getDate() === selectedDate) {
+        for (const e of (eventsByDate[toDateStr(currentYear, currentMonth, selectedDate)] || [])) {
+          if (titleMatchesEvent(n, e)) {
+            if (!map[e.id]) map[e.id] = [];
+            map[e.id].push(n);
+          }
+        }
+      }
+    }
+    return map;
+  }, [selectedDate, notes, currentYear, currentMonth, eventsByDate]);
+
+  const linkedNotes = (event) => linkedNotesMap[event?.id] || [];
 
   return (
     <main className="main-content cal-content" tabIndex={-1} ref={gridRef} {...swipeHandlers}>
@@ -477,29 +508,52 @@ export default function CalendarPage({ isGuest }) {
         <div className="cal-main">
           <div className="cal-topbar">
             <div className="cal-topbar-left">
+              <button className="cal-nav-arrow cal-nav-arrow-left" onClick={() => {
+                if (viewMode === 'month') {
+                  if (currentMonth === 0) { setCurrentMonth(11); setCurrentYear((y) => y - 1); }
+                  else setCurrentMonth((m) => m - 1);
+                } else {
+                  const p = addDays(weekStart, -7); setWeekStart(p); persistWeekStart(p);
+                }
+                setSelectedDate(null);
+              }}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                  <polyline points="15 18 9 12 15 6"/>
+                </svg>
+              </button>
               <h1 className="cal-title">
                 {viewMode === 'month'
                   ? `${MONTHS[currentMonth]} ${currentYear}`
                   : `${SHORT_MONTHS[weekStart.getMonth()]} ${weekStart.getDate()} – ${SHORT_MONTHS[addDays(weekStart, 6).getMonth()]} ${addDays(weekStart, 6).getDate()}, ${addDays(weekStart, 6).getFullYear()}`
                 }
               </h1>
-            </div>
-            <div className="cal-topbar-right">
-              <div className="cal-view-toggle">
-                <button className={`cal-view-btn ${viewMode === 'month' ? 'active' : ''}`} onClick={() => setViewMode('month')}>Month</button>
-                <button className={`cal-view-btn ${viewMode === 'week' ? 'active' : ''}`} onClick={() => setViewMode('week')}>Week</button>
-              </div>
-              <button className={`cal-compact-btn ${compactView ? 'active' : ''}`} onClick={() => setCompactView(!compactView)} title="Compact view">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                  <line x1="8" y1="6" x2="16" y2="6"/><line x1="8" y1="10" x2="16" y2="10"/><line x1="8" y1="14" x2="16" y2="14"/><line x1="8" y1="18" x2="16" y2="18"/>
+              <button className="cal-nav-arrow cal-nav-arrow-right" onClick={() => {
+                if (viewMode === 'month') {
+                  if (currentMonth === 11) { setCurrentMonth(0); setCurrentYear((y) => y + 1); }
+                  else setCurrentMonth((m) => m + 1);
+                } else {
+                  const n = addDays(weekStart, 7); setWeekStart(n); persistWeekStart(n);
+                }
+                setSelectedDate(null);
+              }}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                  <polyline points="9 18 15 12 9 6"/>
                 </svg>
               </button>
+            </div>
+            <div className="cal-topbar-right">
               <button className="cal-today-btn" onClick={goToToday}>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
                 </svg>
                 <span>Today</span>
               </button>
+              <div className="cal-topbar-divider" />
+              <div className="cal-view-toggle">
+                <button className={`cal-view-btn ${viewMode === 'month' ? 'active' : ''}`} onClick={() => setViewMode('month')}>Month</button>
+                <button className={`cal-view-btn ${viewMode === 'week' ? 'active' : ''}`} onClick={() => setViewMode('week')}>Week</button>
+              </div>
+              <div className="cal-topbar-divider" />
               {!isGuest && (
                 <div className="cal-google-row">
                   {syncing && <span className="sync-spinner sync-pulse" />}
@@ -561,64 +615,8 @@ export default function CalendarPage({ isGuest }) {
             </div>
           )}
 
-          {upcoming.length > 0 && (
-            <div className="cal-upcoming-section">
-              <div className="cal-section-header">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text2)" strokeWidth="2" strokeLinecap="round">
-                  <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
-                </svg>
-                <span>Upcoming</span>
-              </div>
-              <div className="cal-upcoming-list">
-                {upcoming.slice(0, 5).map((e, i) => (
-                  <div key={`${e.source}-${e.id || i}`}
-                    className={`cal-upcoming-card ${isPast(e.date, e.time) ? 'cal-upcoming-past' : ''}`}>
-                    <div className="cal-upcoming-time">
-                      <span className="cal-upcoming-time-value">{e.time ? formatTimeDisplay(e.date, e.time) : 'All day'}</span>
-                      <span className="cal-upcoming-date-text">{dateLabel(e.date)}</span>
-                    </div>
-                    <div className="cal-upcoming-info">
-                      <span className="cal-upcoming-title">{e.title}</span>
-                    </div>
-                    {e.source === 'google' && <span className="cal-source-chip">G</span>}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
           {viewMode === 'month' ? (
             <>
-              <div className="cal-nav-bar">
-                <button className="cal-nav-arrow" onClick={() => {
-                  if (currentMonth === 0) { setCurrentMonth(11); setCurrentYear((y) => y - 1); }
-                  else setCurrentMonth((m) => m - 1);
-                  setSelectedDate(null);
-                }}>
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                    <polyline points="15 18 9 12 15 6"/>
-                  </svg>
-                </button>
-                <div className="cal-nav-dots">
-                  {MONTHS.map((name, i) => (
-                    <button key={i}
-                      className={`cal-nav-dot ${i === currentMonth ? 'cal-nav-dot-active' : ''}`}
-                      onClick={() => { setCurrentMonth(i); setSelectedDate(null); }} title={name}>
-                      {i === currentMonth ? name.substring(0, 3) : ''}
-                    </button>
-                  ))}
-                </div>
-                <button className="cal-nav-arrow" onClick={() => {
-                  if (currentMonth === 11) { setCurrentMonth(0); setCurrentYear((y) => y + 1); }
-                  else setCurrentMonth((m) => m + 1);
-                  setSelectedDate(null);
-                }}>
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                    <polyline points="9 18 15 12 9 6"/>
-                  </svg>
-                </button>
-              </div>
-
               <div className={`cal-grid ${compactView ? 'cal-grid-compact' : ''}`}>
                 {DAYS.map((d, i) => (
                   <div key={d} className={`cal-grid-header ${isWeekend(i) ? 'cal-grid-header-weekend' : ''}`}>{d}</div>
@@ -634,7 +632,7 @@ export default function CalendarPage({ isGuest }) {
                   const dayOfWeek = new Date(currentYear, currentMonth, day).getDay();
                   return (
                     <div key={day}
-                      className={`cal-cell ${isToday ? 'cal-cell-today' : ''} ${isSelected ? 'cal-cell-selected' : ''} ${hasNote || evts.length > 0 ? 'cal-cell-active' : ''} ${isWeekend(dayOfWeek) ? 'cal-cell-weekend' : ''}`}
+                      className={`cal-cell ${isToday ? 'cal-cell-today' : ''} ${isSelected ? 'cal-cell-selected' : ''} ${evts.length > 0 ? 'cal-cell-active' : ''} ${isWeekend(dayOfWeek) ? 'cal-cell-weekend' : ''}`}
                       onClick={() => {
                         setSelectedDate(selectedDate === day ? null : day);
                         setShowQuickAdd(null);
@@ -655,13 +653,19 @@ export default function CalendarPage({ isGuest }) {
                       <span className="cal-cell-num">{day}</span>
                       {evts.length > 0 && (
                         <div className="cal-cell-events">
-                          {evts.slice(0, compactView ? 0 : 2).map((ev, ei) => (
-                            <span key={ei} className="cal-cell-ev" title={ev.title}>{ev.title}</span>
+                          {evts.slice(0, compactView ? 1 : 3).map((ev, ei) => (
+                            <span key={ei}
+                              className="cal-cell-ev"
+                              title={ev.title}
+                              style={{ '--ev-color': `var(--ev-${['blue','green','orange','purple','pink','cyan'][ei % 6]})` }}>
+                              <span className="cal-cell-ev-dot" />
+                              {ev.title}
+                            </span>
                           ))}
-                          {evts.length > 2 && !compactView && <span className="cal-cell-more">+{evts.length - 2} more</span>}
+                          {evts.length > (compactView ? 1 : 3) && <span className="cal-cell-more">+{evts.length - (compactView ? 1 : 3)}</span>}
                         </div>
                       )}
-                      {hasNote && evts.length === 0 && <div className="cal-cell-indicators"><span className="cal-cell-dot" /></div>}
+                      {!evts.length && <span className="cal-cell-add" onClick={(e) => { e.stopPropagation(); handleCellDoubleClick(day); }}>+</span>}
                       {showQuickAdd === day && (
                         <div className="cal-quick-add" onClick={(e) => e.stopPropagation()}>
                           <input className="cal-quick-input" placeholder="New event..." value={formData.title}
@@ -681,32 +685,6 @@ export default function CalendarPage({ isGuest }) {
             </>
           ) : (
             <>
-              <div className="cal-nav-bar">
-                <button className="cal-nav-arrow" onClick={() => { const p = addDays(weekStart, -7); setWeekStart(p); persistWeekStart(p); }}>
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="15 18 9 12 15 6"/></svg>
-                </button>
-                <div className="cal-nav-dots cal-week-dots">
-                  {weekDates.map((d, i) => {
-                    const ds = toDateStr(d.getFullYear(), d.getMonth(), d.getDate());
-                    const evts = allEvents.filter((e) => e.date === ds);
-                    const hasNote = noteDates.some((nd) => nd.getFullYear() === d.getFullYear() && nd.getMonth() === d.getMonth() && nd.getDate() === d.getDate());
-                    const isToday = toDateStr(today.getFullYear(), today.getMonth(), today.getDate()) === ds;
-                    return (
-                      <button key={i} className={`cal-week-day ${isToday ? 'cal-week-day-today' : ''}`} onClick={() => {
-                        setSelectedDate(d.getDate()); setCurrentMonth(d.getMonth()); setCurrentYear(d.getFullYear());
-                      }}>
-                        <span className="cal-week-day-name">{DAYS[d.getDay()]}</span>
-                        <span className="cal-week-day-num">{d.getDate()}</span>
-                        {(hasNote || evts.length > 0) && <span className="cal-week-day-dot" />}
-                      </button>
-                    );
-                  })}
-                </div>
-                <button className="cal-nav-arrow" onClick={() => { const n = addDays(weekStart, 7); setWeekStart(n); persistWeekStart(n); }}>
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="9 18 15 12 9 6"/></svg>
-                </button>
-              </div>
-
               <div className="cal-week-timegrid" style={{ minHeight: (endHour - startHour) * hourHeight + 30 }}>
                 <div className="cal-week-timecol">
                   {Array.from({ length: endHour - startHour + 1 }, (_, i) => (
@@ -762,83 +740,97 @@ export default function CalendarPage({ isGuest }) {
           )}
         </div>
 
-        {selectedDate && (
-          <aside className={`cal-sidebar ${selectedDate ? 'cal-sidebar-visible' : ''}`}>
-            <div className="cal-sidebar-header">
-              <span className="cal-sidebar-date">{selectedDs}</span>
-              <div className="cal-sidebar-header-right">
-                <button className="cal-sidebar-add-event" onClick={() => { setFormData({ ...formData, date: selectedDs }); setShowForm(true); }} title="Add event">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-                    <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
-                  </svg>
-                </button>
-                <button className="cal-sidebar-close" onClick={() => setSelectedDate(null)}>
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                    <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-                  </svg>
-                </button>
-              </div>
+        <aside className="cal-sidebar">
+          {/* Mini Calendar */}
+          <div className="cal-sidebar-section cal-sidebar-mini-wrap">
+            <div className="cal-mini-header">
+              <button className="cal-mini-nav" onClick={() => {
+                if (sidebarMonth === 0) { setSidebarMonth(11); setSidebarYear((y) => y - 1); }
+                else setSidebarMonth((m) => m - 1);
+              }}>
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
+              </button>
+              <span className="cal-mini-label">{SHORT_MONTHS[sidebarMonth]} {sidebarYear}</span>
+              <button className="cal-mini-nav" onClick={() => {
+                if (sidebarMonth === 11) { setSidebarMonth(0); setSidebarYear((y) => y + 1); }
+                else setSidebarMonth((m) => m + 1);
+              }}>
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="9 18 15 12 9 6"/></svg>
+              </button>
             </div>
-
-            <div className="cal-sidebar-minimonth">
-              <div className="cal-mini-header">
-                <button className="cal-mini-nav" onClick={() => {
-                  if (sidebarMonth === 0) { setSidebarMonth(11); setSidebarYear((y) => y - 1); }
-                  else setSidebarMonth((m) => m - 1);
-                }}>
-                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
-                </button>
-                <span className="cal-mini-label">{SHORT_MONTHS[sidebarMonth]} {sidebarYear}</span>
-                <button className="cal-mini-nav" onClick={() => {
-                  if (sidebarMonth === 11) { setSidebarMonth(0); setSidebarYear((y) => y + 1); }
-                  else setSidebarMonth((m) => m + 1);
-                }}>
-                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="9 18 15 12 9 6"/></svg>
-                </button>
-              </div>
-              <div className="cal-mini-grid">
-                {DAYS.map((d) => <span key={d} className="cal-mini-dayname">{d[0]}</span>)}
-                {Array.from({ length: sidebarFirstDay }).map((_, i) => <span key={`e-${i}`} className="cal-mini-cell cal-mini-empty" />)}
-                {Array.from({ length: sidebarDaysInMonth }, (_, i) => i + 1).map((day) => {
-                  const isSel = selectedDate === day && sidebarMonth === currentMonth && sidebarYear === currentYear;
-                  const isToday = today.getDate() === day && today.getMonth() === sidebarMonth && today.getFullYear() === sidebarYear;
-                  return (
-                    <span key={day}
-                      className={`cal-mini-cell ${isSel ? 'cal-mini-sel' : ''} ${isToday ? 'cal-mini-today' : ''}`}
-                      onClick={() => { setSelectedDate(day); setCurrentMonth(sidebarMonth); setCurrentYear(sidebarYear); }}>
-                      {day}
-                    </span>
-                  );
-                })}
-              </div>
+            <div className="cal-mini-grid">
+              {DAYS.map((d) => <span key={d} className="cal-mini-dayname">{d[0]}</span>)}
+              {Array.from({ length: sidebarFirstDay }).map((_, i) => <span key={`e-${i}`} className="cal-mini-cell cal-mini-empty" />)}
+              {Array.from({ length: sidebarDaysInMonth }, (_, i) => i + 1).map((day) => {
+                const isSel = selectedDate === day && sidebarMonth === currentMonth && sidebarYear === currentYear;
+                const isToday = today.getDate() === day && today.getMonth() === sidebarMonth && today.getFullYear() === sidebarYear;
+                return (
+                  <span key={day}
+                    className={`cal-mini-cell ${isSel ? 'cal-mini-sel' : ''} ${isToday ? 'cal-mini-today' : ''}`}
+                    onClick={() => { setSelectedDate(day); setCurrentMonth(sidebarMonth); setCurrentYear(sidebarYear); }}>
+                    {day}
+                  </span>
+                );
+              })}
             </div>
+          </div>
 
-            {selectedNotes.length > 0 && (
-              <div className="cal-sidebar-section">
-                <div className="cal-sidebar-section-title">
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--text3)" strokeWidth="2" strokeLinecap="round">
-                    <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/>
-                  </svg>
-                  Notes
-                </div>
-                {selectedNotes.map((n) => (
-                  <div key={n.id} className="cal-sidebar-item cal-sidebar-item-clickable" onClick={() => navigate('/notes', { state: { focusNoteId: n.id } })}>
-                    <span>{n.title || n.shortSummary?.slice(0, 60)}</span>
-                    <span className="cal-sidebar-item-meta">{n.meetingType} · {n.audioDurationS != null ? n.audioDurationS.toFixed(0) : 0}s</span>
+          {/* Upcoming Events */}
+          <div className="cal-sidebar-section">
+            <div className="cal-sidebar-section-title">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--text3)" strokeWidth="2" strokeLinecap="round">
+                <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+              </svg>
+              Upcoming
+            </div>
+            {upcoming.length > 0 ? (
+              <div className="cal-sidebar-events">
+                {upcoming.slice(0, 5).map((e, i) => (
+                  <div key={`${e.source}-${e.id || i}`} className="cal-sidebar-ev-row"
+                    onClick={() => {
+                      const d = new Date(e.date + 'T00:00:00');
+                      setSelectedDate(d.getDate());
+                      setCurrentMonth(d.getMonth());
+                      setCurrentYear(d.getFullYear());
+                    }}
+                    style={{ '--ev-color': `var(--ev-${['blue','green','orange','purple','pink','cyan'][i % 6]})` }}>
+                    <div className="cal-sidebar-ev-bar" />
+                    <div className="cal-sidebar-ev-info">
+                      <span className="cal-sidebar-ev-title">{e.title}</span>
+                      <span className="cal-sidebar-ev-time">
+                        {dateLabel(e.date)}
+                        {e.time ? ` · ${formatTimeDisplay(e.date, e.time)}` : ''}
+                      </span>
+                    </div>
+                    {e.source === 'google' && <span className="cal-source-chip-sm">G</span>}
                   </div>
                 ))}
               </div>
+            ) : (
+              <div className="cal-sidebar-empty-sm">
+                <p>No upcoming events</p>
+              </div>
             )}
+          </div>
 
-            {selectedEvts.length > 0 && (
+          {/* Selected day detail (if a date is selected) */}
+          {selectedDate && (
+            <>
+              <div className="cal-sidebar-divider" />
               <div className="cal-sidebar-section">
                 <div className="cal-sidebar-section-title">
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--text3)" strokeWidth="2" strokeLinecap="round">
                     <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>
                   </svg>
-                  Events
+                  {selectedDs}
                   <span className="cal-sidebar-ev-count">{selectedEvts.length}</span>
+                  <button className="cal-sidebar-add-event" onClick={() => { setFormData({ ...formData, date: selectedDs }); setShowForm(true); }} title="Add event">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                      <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+                    </svg>
+                  </button>
                 </div>
+
                 {selectedEvts.map((e) => (
                   editingEvent?.id === e.id && editingEvent?.source === e.source ? (
                     <div key={`edit-${e.source}-${e.id}`} className="cal-sidebar-event cal-sidebar-event-editing">
@@ -858,12 +850,12 @@ export default function CalendarPage({ isGuest }) {
                     <div key={`${e.source}-${e.id}`}
                       className={`cal-sidebar-event ${isPast(e.date, e.time) ? 'cal-sidebar-event-past' : ''}`}>
                       <div className="cal-sidebar-ev-bar" />
-                      <div className="cal-sidebar-event-top">
-                        <div className="cal-sidebar-event-info">
-                          <span className="cal-sidebar-event-title">{e.title}</span>
-                          {e.time && <span className="cal-sidebar-event-time">{formatTimeDisplay(e.date, e.time)}</span>}
+                      <div className="cal-sidebar-ev-row">
+                        <div className="cal-sidebar-ev-info">
+                          <span className="cal-sidebar-ev-title">{e.title}</span>
+                          {e.time && <span className="cal-sidebar-ev-time">{formatTimeDisplay(e.date, e.time)}</span>}
                         </div>
-                        <div className="cal-sidebar-event-actions">
+                        <div className="cal-sidebar-ev-actions">
                           {e.source === 'google' && <span className="cal-source-chip-sm">G</span>}
                           <button className="cal-sidebar-edit" onClick={() => startEditEvent(e)} title="Edit">
                             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
@@ -886,20 +878,29 @@ export default function CalendarPage({ isGuest }) {
                     </div>
                   )
                 ))}
-              </div>
-            )}
 
-            {selectedNotes.length === 0 && selectedEvts.length === 0 && (
-              <div className="cal-sidebar-empty">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--text3)" strokeWidth="1.5" strokeLinecap="round">
-                  <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
-                </svg>
-                <p>Nothing scheduled for this day</p>
-                <button className="cal-sidebar-add-btn" onClick={() => { setFormData({ ...formData, date: selectedDs }); setShowForm(true); }}>Add Event</button>
+                {selectedNotes.length > 0 && (
+                  <>
+                    <div className="cal-sidebar-subsection-title">Linked Notes</div>
+                    {selectedNotes.map((n) => (
+                      <div key={n.id} className="cal-sidebar-item cal-sidebar-item-clickable" onClick={() => navigate('/notes', { state: { focusNoteId: n.id } })}>
+                        <span>{n.title || n.shortSummary?.slice(0, 60)}</span>
+                        <span className="cal-sidebar-item-meta">{n.meetingType} · {n.audioDurationS != null ? n.audioDurationS.toFixed(0) : 0}s</span>
+                      </div>
+                    ))}
+                  </>
+                )}
+
+                {selectedEvts.length === 0 && selectedNotes.length === 0 && (
+                  <div className="cal-sidebar-empty-sm">
+                    <p>Nothing scheduled for this day</p>
+                    <button className="cal-sidebar-add-btn" onClick={() => { setFormData({ ...formData, date: selectedDs }); setShowForm(true); }}>+ Add Event</button>
+                  </div>
+                )}
               </div>
-            )}
-          </aside>
-        )}
+            </>
+          )}
+        </aside>
       </div>
     </main>
   );

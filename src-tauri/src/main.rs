@@ -3,6 +3,7 @@ mod db;
 mod whisper;
 mod llm;
 mod google;
+mod detector;
 
 use chrono::Local;
 use serde::{Deserialize, Serialize};
@@ -11,8 +12,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{
-    CustomMenuItem, Manager, State, SystemTray, SystemTrayEvent, SystemTrayMenu,
-    SystemTrayMenuItem,
+    CustomMenuItem, Manager, State, SystemTray, SystemTrayEvent, SystemTrayMenu, SystemTrayMenuItem,
 };
 
 macro_rules! log {
@@ -44,12 +44,18 @@ pub struct Note {
     pub audio_duration_s: f64,
 }
 
+pub struct RecordingState {
+    is_recording: bool,
+    audio_recorder: Option<audio::AudioRecorder>,
+    meeting_type: String,
+    live_stop_flag: Option<Arc<AtomicBool>>,
+    recording_started_at: Option<std::time::Instant>,
+    tray_stop_flag: Option<Arc<AtomicBool>>,
+}
+
 pub struct AppState {
-    pub is_recording: Mutex<bool>,
-    pub audio_recorder: Mutex<Option<audio::AudioRecorder>>,
-    pub meeting_type: Mutex<String>,
+    pub recording: Mutex<RecordingState>,
     pub db: db::Database,
-    pub live_stop_flag: Mutex<Option<Arc<AtomicBool>>>,
 }
 
 fn save_wav(audio_data: &[i16], sample_rate: u32, id: &str) -> Result<String, String> {
@@ -77,14 +83,71 @@ fn save_wav(audio_data: &[i16], sample_rate: u32, id: &str) -> Result<String, St
     Ok(path_str)
 }
 
+fn set_tray_icon(app_handle: &tauri::AppHandle, recording: bool) {
+    if let Some(tray) = app_handle.tray_handle_by_id("main") {
+        let icon = if recording {
+            tauri::Icon::Raw(include_bytes!("../icons/tray-recording.png").to_vec())
+        } else {
+            tauri::Icon::Raw(include_bytes!("../icons/tray.png").to_vec())
+        };
+        let _ = tray.set_icon(icon);
+    }
+}
+
+fn show_or_create_mini_recorder(app_handle: &tauri::AppHandle, recording: bool) {
+    use tauri::WindowUrl;
+
+    let (width, height): (f64, f64) = if recording { (420.0, 72.0) } else { (300.0, 56.0) };
+    let url = if recording {
+        WindowUrl::App("?mini=true&source=recording".into())
+    } else {
+        WindowUrl::App("?mini=true".into())
+    };
+
+    if let Some(win) = app_handle.get_window("mini-recorder") {
+        let _ = win.set_size(tauri::LogicalSize::new(width, height));
+        let _ = win.show();
+        return;
+    }
+
+    let window = match tauri::WindowBuilder::new(
+        app_handle,
+        "mini-recorder",
+        url,
+    )
+    .title("")
+    .inner_size(width, height)
+    .resizable(false)
+    .decorations(false)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .build()
+    {
+        Ok(w) => w,
+        Err(e) => {
+            log!("Failed to create mini window: {}", e);
+            return;
+        }
+    };
+
+    if let Ok(Some(monitor)) = window.current_monitor() {
+        let scale = monitor.scale_factor();
+        let size = monitor.size();
+        let pos = monitor.position();
+        let x = pos.x as f64 / scale + size.width as f64 / scale - width - 20.0;
+        let y = pos.y as f64 / scale + 40.0;
+        let _ = window.set_position(tauri::LogicalPosition::new(x, y));
+    }
+}
+
 #[tauri::command]
 fn start_recording(
     app_handle: tauri::AppHandle,
     state: State<AppState>,
     meeting_type: String,
 ) -> Result<(), String> {
-    let mut is_rec = state.is_recording.lock().map_err(|e| e.to_string())?;
-    if *is_rec {
+    let mut rec = state.recording.lock().map_err(|e| e.to_string())?;
+    if rec.is_recording {
         return Err("Already recording".into());
     }
 
@@ -93,52 +156,88 @@ fn start_recording(
     let sample_rate = recorder.sample_rate();
 
     let stop_flag = Arc::new(AtomicBool::new(false));
-    audio::spawn_live_transcriber(&recorder, sample_rate, stop_flag.clone(), app_handle);
+    audio::spawn_live_transcriber(&recorder, sample_rate, stop_flag.clone(), app_handle.clone());
 
-    let mut stored = state.audio_recorder.lock().map_err(|e| e.to_string())?;
-    *stored = Some(recorder);
+    let started_at = std::time::Instant::now();
 
-    let mut flag = state.live_stop_flag.lock().map_err(|e| e.to_string())?;
-    *flag = Some(stop_flag);
+    let tray_stop = Arc::new(AtomicBool::new(false));
+    let tray_stop_clone = tray_stop.clone();
+    let ah = app_handle.clone();
+    std::thread::spawn(move || {
+        while !tray_stop_clone.load(Ordering::Relaxed) {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            let elapsed = started_at.elapsed().as_secs();
+            let m = elapsed / 60;
+            let s = elapsed % 60;
+            let label = format!("Stop Recording ({:02}:{:02})", m, s);
+            if let Some(tray) = ah.tray_handle_by_id("main") {
+                let _ = tray.get_item("record").set_title(&label);
+            }
+        }
+        if let Some(tray) = ah.tray_handle_by_id("main") {
+            let _ = tray.get_item("record").set_title("Start Recording");
+        }
+    });
 
-    let mut mt = state.meeting_type.lock().map_err(|e| e.to_string())?;
-    *mt = meeting_type;
+    rec.is_recording = true;
+    rec.audio_recorder = Some(recorder);
+    rec.meeting_type = meeting_type;
+    rec.live_stop_flag = Some(stop_flag);
+    rec.recording_started_at = Some(started_at);
+    rec.tray_stop_flag = Some(tray_stop);
+    drop(rec);
 
-    *is_rec = true;
     log!("Recording active");
+
+    set_tray_icon(&app_handle, true);
+    show_or_create_mini_recorder(&app_handle, true);
+    let _ = app_handle.emit_all("recording-started", serde_json::json!({}));
+
     Ok(())
 }
 
 #[tauri::command]
-fn stop_recording(state: State<AppState>, title: String) -> Result<String, String> {
+fn stop_recording(app_handle: tauri::AppHandle, state: State<AppState>, title: String) -> Result<String, String> {
     log!("Recording stop, title={}", title);
 
-    let mut is_rec = state.is_recording.lock().map_err(|e| e.to_string())?;
-    if !*is_rec {
+    let mut rec = state.recording.lock().map_err(|e| e.to_string())?;
+    if !rec.is_recording {
         return Err("Not recording".into());
     }
 
-    {
-        let mut flag = state.live_stop_flag.lock().map_err(|e| e.to_string())?;
-        if let Some(f) = flag.take() {
-            f.store(true, Ordering::Relaxed);
-        }
+    // Stop tray timer thread
+    if let Some(flag) = rec.tray_stop_flag.take() {
+        flag.store(true, Ordering::Relaxed);
+    }
+    set_tray_icon(&app_handle, false);
+    if let Some(tray) = app_handle.tray_handle_by_id("main") {
+        let _ = tray.get_item("record").set_title("Start Recording");
+    }
+    if let Some(win) = app_handle.get_window("mini-recorder") {
+        let _ = win.set_size(tauri::LogicalSize::new(300.0, 56.0));
     }
 
-    let mut stored = state.audio_recorder.lock().map_err(|e| e.to_string())?;
-    let recorder = stored.take().ok_or("No recording in progress")?;
+    if let Some(flag) = rec.live_stop_flag.take() {
+        flag.store(true, Ordering::Relaxed);
+    }
+
+    let recorder = rec.audio_recorder.take().ok_or("No recording in progress")?;
+    let meeting_type = rec.meeting_type.clone();
 
     let (audio_data, sample_rate, _) = recorder.stop()?;
-    *is_rec = false;
+    rec.is_recording = false;
+    rec.recording_started_at = None;
+    drop(rec);
 
     let recording_id = uuid::Uuid::new_v4().to_string();
     let audio_duration_s = audio_data.len() as f64 / sample_rate as f64;
     let audio_file = save_wav(&audio_data, sample_rate, &recording_id)?;
 
+    let _ = app_handle.emit_all("processing-stage", serde_json::json!({"stage": "transcribing"}));
     log!("Transcribing...");
     let transcript = whisper::transcribe(&audio_data, sample_rate)?;
 
-    let meeting_type = state.meeting_type.lock().map_err(|e| e.to_string())?.clone();
+    let _ = app_handle.emit_all("processing-stage", serde_json::json!({"stage": "generating"}));
     log!("Generating notes...");
     let mut note = llm::generate_notes(&title, &transcript, &meeting_type)?;
 
@@ -160,6 +259,15 @@ fn load_notes(state: State<AppState>) -> Result<Vec<Note>, String> {
 #[tauri::command]
 fn read_audio_file(path: String) -> Result<Vec<u8>, String> {
     std::fs::read(&path).map_err(|e| format!("Read error: {}", e))
+}
+
+#[tauri::command]
+fn get_audio_level(state: State<AppState>) -> Result<f32, String> {
+    let rec = state.recording.lock().map_err(|e| e.to_string())?;
+    match &rec.audio_recorder {
+        Some(r) => Ok(r.current_level()),
+        None => Ok(0.0),
+    }
 }
 
 #[tauri::command]
@@ -241,39 +349,76 @@ fn google_create_event(title: String, date: String, time: String, notes: String)
 
 #[tauri::command]
 fn create_mini_window(app_handle: tauri::AppHandle) -> Result<(), String> {
-    use tauri::WindowUrl;
-
-    if app_handle.get_window("mini-recorder").is_some() {
-        let win = app_handle.get_window("mini-recorder").unwrap();
-        let _ = win.show();
+    show_or_create_mini_recorder(&app_handle, false);
+    if let Some(win) = app_handle.get_window("mini-recorder") {
         let _ = win.set_focus();
-        return Ok(());
     }
-
-    let window = tauri::WindowBuilder::new(
-        &app_handle,
-        "mini-recorder",
-        WindowUrl::App("?mini=true".into()),
-    )
-    .title("")
-    .inner_size(200.0, 56.0)
-    .resizable(false)
-    .decorations(false)
-    .always_on_top(true)
-    .skip_taskbar(true)
-    .build()
-    .map_err(|e| format!("Mini window: {}", e))?;
-
-    if let Some(monitor) = window.current_monitor().map_err(|e| e.to_string())? {
-        let scale = monitor.scale_factor();
-        let size = monitor.size();
-        let pos = monitor.position();
-        let x = pos.x as f64 / scale + size.width as f64 / scale - 220.0;
-        let y = pos.y as f64 / scale + 40.0;
-        let _ = window.set_position(tauri::LogicalPosition::new(x, y));
-    }
-
     Ok(())
+}
+
+#[tauri::command]
+fn get_recording_state(state: State<AppState>) -> Result<bool, String> {
+    let rec = state.recording.lock().map_err(|e| e.to_string())?;
+    Ok(rec.is_recording)
+}
+
+#[tauri::command]
+fn pause_recording(state: State<AppState>) -> Result<(), String> {
+    let rec = state.recording.lock().map_err(|e| e.to_string())?;
+    if let Some(r) = &rec.audio_recorder {
+        r.pause();
+        Ok(())
+    } else {
+        Err("Not recording".into())
+    }
+}
+
+#[tauri::command]
+fn resume_recording(state: State<AppState>) -> Result<(), String> {
+    let rec = state.recording.lock().map_err(|e| e.to_string())?;
+    if let Some(r) = &rec.audio_recorder {
+        r.resume();
+        Ok(())
+    } else {
+        Err("Not recording".into())
+    }
+}
+
+#[tauri::command]
+fn get_pause_state(state: State<AppState>) -> Result<bool, String> {
+    let rec = state.recording.lock().map_err(|e| e.to_string())?;
+    match &rec.audio_recorder {
+        Some(r) => Ok(r.is_paused()),
+        None => Ok(false),
+    }
+}
+
+#[tauri::command]
+fn search_notes(state: State<AppState>, query: String) -> Result<Vec<Note>, String> {
+    state.db.search_notes(&query, 50)
+}
+
+#[tauri::command]
+fn save_note(state: State<AppState>, note: Note) -> Result<(), String> {
+    state.db.save_note(&note)
+}
+
+#[tauri::command]
+fn export_notes(state: State<AppState>, note_ids: Vec<String>) -> Result<String, String> {
+    let selected = state.db.load_notes_by_ids(&note_ids)?;
+    let mut md = String::new();
+    for (i, note) in selected.iter().enumerate() {
+        if i > 0 { md.push_str("\n\n---\n\n"); }
+        md.push_str(&format!("# {}\n\n", note.title));
+        md.push_str(&format!("**Date:** {}\n", note.date));
+        md.push_str(&format!("**Type:** {}\n", note.meeting_type));
+        if note.short_summary.len() > 0 { md.push_str(&format!("\n## Summary\n{}\n", note.short_summary)); }
+        if note.action_items.len() > 0 {
+            md.push_str("\n## Action Items\n");
+            for item in &note.action_items { md.push_str(&format!("- [ ] {}\n", item)); }
+        }
+    }
+    Ok(md)
 }
 
 #[tauri::command]
@@ -282,13 +427,11 @@ fn toggle_recording(
     state: State<AppState>,
     meeting_type: String,
 ) -> Result<Option<String>, String> {
-    let is_rec = state.is_recording.lock().map_err(|e| e.to_string())?;
-    if *is_rec {
-        drop(is_rec);
-        stop_recording(state, "Quick Note".to_string())
+    let is_rec = state.recording.lock().map_err(|e| e.to_string())?.is_recording;
+    if is_rec {
+        stop_recording(app_handle, state, "Quick Note".to_string())
             .map(Some)
     } else {
-        drop(is_rec);
         start_recording(app_handle, state, meeting_type)?;
         Ok(None)
     }
@@ -317,11 +460,15 @@ fn main() {
     tauri::Builder::default()
         .system_tray(tray)
         .manage(AppState {
-            is_recording: Mutex::new(false),
-            audio_recorder: Mutex::new(None),
-            meeting_type: Mutex::new("meeting".into()),
+            recording: Mutex::new(RecordingState {
+                is_recording: false,
+                audio_recorder: None,
+                meeting_type: "meeting".into(),
+                live_stop_flag: None,
+                recording_started_at: None,
+                tray_stop_flag: None,
+            }),
             db,
-            live_stop_flag: Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
             start_recording,
@@ -332,18 +479,32 @@ fn main() {
             delete_note,
             read_audio_file,
             write_text_file,
+            get_audio_level,
             ask_about_note,
             ask_all_notes,
             add_calendar_event,
             load_calendar_events,
             delete_calendar_event,
             create_mini_window,
+            get_recording_state,
+            pause_recording,
+            resume_recording,
+            get_pause_state,
+            search_notes,
+            save_note,
+            export_notes,
             google_auth_status,
             google_sign_in,
             google_sign_out,
             google_sync_events,
             google_create_event,
+            detector::dismiss_meeting_detection,
+            detector::reset_detection_cooldown,
         ])
+        .setup(|app| {
+            detector::start_detector(app.handle());
+            Ok(())
+        })
         .on_system_tray_event(|app, event| match event {
             SystemTrayEvent::LeftClick { .. } => {
                 if let Some(window) = app.get_window("main") {
@@ -358,29 +519,20 @@ fn main() {
             SystemTrayEvent::MenuItemClick { id, .. } => match id.as_str() {
                 "record" => {
                     let state: State<AppState> = app.state();
-                    let is_rec = state.is_recording.lock().unwrap();
-                    if *is_rec {
-                        drop(is_rec);
-                        let state: State<AppState> = app.state();
-                        if let Ok(result) = stop_recording(state, "Quick Note".to_string()) {
+                    let is_rec = state.recording.lock().unwrap().is_recording;
+                    if is_rec {
+                        if let Ok(result) = stop_recording(app.clone(), state, "Quick Note".to_string()) {
                             if let Some(window) = app.get_window("main") {
                                 let _ = window.emit("note-ready", result);
                             }
                         }
-                        // Update tray menu text
                         if let Some(tray) = app.tray_handle_by_id("main") {
-                            let item = tray.get_item("record");
-                            let _ = item.set_title("Start Recording");
+                            let _ = tray.get_item("record").set_title("Start Recording");
                         }
                     } else {
-                        drop(is_rec);
-                        // Can't start from tray without meeting_type — use default
-                        let state: State<AppState> = app.state();
                         let _ = start_recording(app.clone(), state, "meeting".to_string());
-                        // Update tray menu text
                         if let Some(tray) = app.tray_handle_by_id("main") {
-                            let item = tray.get_item("record");
-                            let _ = item.set_title("Stop Recording");
+                            let _ = tray.get_item("record").set_title("Stop Recording");
                         }
                         if let Some(window) = app.get_window("main") {
                             let _ = window.emit("recording-started", ());

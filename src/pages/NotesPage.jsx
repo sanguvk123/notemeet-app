@@ -2,8 +2,10 @@ import { useState, useRef, useCallback, useMemo, useEffect } from 'react';
 import { useLocation } from 'react-router-dom';
 import { invoke } from '@tauri-apps/api/tauri';
 import { useNotes } from '../context/NoteContext';
+import { useToast } from '../components/ToastContext';
 import { groupByDate, formatTime } from '../utils';
 import ChatPanel from '../components/ChatPanel';
+import NoteTemplates from '../components/NoteTemplates';
 
 const roles = [
   { value: 'meeting', label: 'Meeting' },
@@ -65,7 +67,7 @@ function EditField({ value, onChange, isEditing, multiline }) {
     : <p className="detail-short">{value}</p>;
 
   return multiline
-    ? <textarea className="note-edit-input note-edit-textarea" value={value} onChange={(e) => onChange(e.target.value)} />
+    ? <textarea className="note-edit-input note-edit-textarea" value={value} onChange={(e) => onChange(e.target.value)} onKeyDown={(e) => { if (e.key === 'Tab') { e.preventDefault(); const start = e.target.selectionStart; const end = e.target.selectionEnd; const val = e.target.value; const newVal = val.substring(0, start) + '  ' + val.substring(end); onChange(newVal); setTimeout(() => { e.target.selectionStart = e.target.selectionEnd = start + 2; }, 0); } }} />
     : <input className="note-edit-input" value={value} onChange={(e) => onChange(e.target.value)} />;
 }
 
@@ -84,7 +86,8 @@ function ConfirmModal({ message, onConfirm, onCancel }) {
 }
 
 export default function NotesPage() {
-  const { notes, isRecording, status, transcript, elapsed, meetingType, setMeetingType, startRecording, stopRecording, updateNote, deleteNote } = useNotes();
+  const { notes, isRecording, isPaused, status, transcript, elapsed, meetingType, setMeetingType, startRecording, stopRecording, togglePause, updateNote, deleteNote } = useNotes();
+  const showToast = useToast();
   const [selectedNote, setSelectedNote] = useState(null);
   const [processing, setProcessing] = useState(false);
   const [playingNoteId, setPlayingNoteId] = useState(null);
@@ -97,6 +100,11 @@ export default function NotesPage() {
   const [title, setTitle] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [filterType, setFilterType] = useState('');
+  const [showTemplates, setShowTemplates] = useState(false);
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const [showBatchExport, setShowBatchExport] = useState(false);
+  const [viewedIds, setViewedIds] = useState(new Set());
+  const autoSaveRef = useRef(null);
   const audioRef = useRef(null);
 
   const location = useLocation();
@@ -112,6 +120,91 @@ export default function NotesPage() {
       window.history.replaceState({}, '');
     }
   }, [location.state?.focusNoteId, notes]);
+
+  // Auto-save with debounce
+  useEffect(() => {
+    if (!editing || !selectedNote) return;
+    clearTimeout(autoSaveRef.current);
+    autoSaveRef.current = setTimeout(async () => {
+      const updated = {
+        ...selectedNote,
+        title: editFields.title,
+        shortSummary: editFields.shortSummary,
+        fullSummary: editFields.fullSummary,
+        actionItems: editFields.actionItems.split('\n').map((s) => s.trim()).filter(Boolean),
+      };
+      const ok = await updateNote(updated);
+      if (ok) setSelectedNote(updated);
+    }, 300);
+    return () => clearTimeout(autoSaveRef.current);
+  }, [editFields, editing]);
+
+  // Track viewed notes for unread badge
+  useEffect(() => {
+    if (selectedNote) {
+      setViewedIds((prev) => new Set([...prev, selectedNote.id]));
+    }
+  }, [selectedNote?.id]);
+
+  // Listen for focus-search custom event (from CommandPalette)
+  useEffect(() => {
+    const handler = () => {
+      const input = document.querySelector('.note-search-input');
+      if (input) input.focus();
+    };
+    window.addEventListener('focus-search', handler);
+    return () => window.removeEventListener('focus-search', handler);
+  }, []);
+
+  const handleTemplateSelect = useCallback((template) => {
+    setShowTemplates(false);
+    setTitle(template.title || '');
+    setMeetingType(template.meetingType || 'meeting');
+    startRecording(template.meetingType || 'meeting');
+    showToast('Starting recording with ' + template.label, 'info');
+  }, [startRecording, setMeetingType, showToast]);
+
+  const toggleSelectNote = useCallback((noteId) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(noteId)) next.delete(noteId);
+      else next.add(noteId);
+      return next;
+    });
+  }, []);
+
+  const handleBatchExport = useCallback(async () => {
+    if (selectedIds.size === 0) return;
+    const ids = Array.from(selectedIds);
+    try {
+      const md = await invoke('export_notes', { noteIds: ids });
+      const blob = new Blob([md], { type: 'text/markdown' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'NoteMeet-export.md';
+      a.click();
+      URL.revokeObjectURL(url);
+      showToast(`Exported ${ids.length} notes`, 'success');
+      setSelectedIds(new Set());
+    } catch (e) {
+      showToast('Export failed', 'error');
+    }
+  }, [selectedIds, showToast]);
+
+  const handleTabInsert = (e, field) => {
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      const start = e.target.selectionStart;
+      const end = e.target.selectionEnd;
+      const val = e.target.value;
+      const newVal = val.substring(0, start) + '  ' + val.substring(end);
+      setEditFields({ ...editFields, [field]: newVal });
+      setTimeout(() => {
+        e.target.selectionStart = e.target.selectionEnd = start + 2;
+      }, 0);
+    }
+  };
 
   const filteredNotes = useMemo(() => {
     let result = notes;
@@ -162,14 +255,14 @@ export default function NotesPage() {
     setPlayingNoteId(null);
   }, [audioUrl]);
 
-  const handleStop = async () => {
+  const handleStop = useCallback(async () => {
     setProcessing(true);
     await stopRecording(title || 'Untitled Meeting');
     setProcessing(false);
     setTitle('');
-  };
+  }, [title, stopRecording]);
 
-  const enterEditMode = () => {
+  const enterEditMode = useCallback(() => {
     if (!selectedNote) return;
     setEditFields({
       title: selectedNote.title,
@@ -178,9 +271,9 @@ export default function NotesPage() {
       actionItems: selectedNote.actionItems?.join('\n') || '',
     });
     setEditing(true);
-  };
+  }, [selectedNote]);
 
-  const saveEdit = async () => {
+  const saveEdit = useCallback(async () => {
     if (!selectedNote) return;
     setSaving(true);
     const updated = {
@@ -194,26 +287,26 @@ export default function NotesPage() {
     if (ok) setSelectedNote(updated);
     setSaving(false);
     setEditing(false);
-  };
+  }, [selectedNote, editFields, updateNote]);
 
-  const cancelEdit = () => {
+  const cancelEdit = useCallback(() => {
     setEditing(false);
-  };
+  }, []);
 
-  const handleDelete = async () => {
+  const handleDelete = useCallback(async () => {
     if (!selectedNote) return;
     const id = selectedNote.id;
     setShowDeleteConfirm(false);
     const ok = await deleteNote(id);
     if (ok) setSelectedNote(null);
-  };
+  }, [selectedNote, deleteNote]);
 
-  const handleSelectNote = (note) => {
+  const handleSelectNote = useCallback((note) => {
     if (editing) return;
     setSelectedNote(note);
     setShowChat(false);
     setShowDeleteConfirm(false);
-  };
+  }, [editing]);
 
   const exportNote = async (note) => {
     const md = noteToMarkdown(note);
@@ -254,14 +347,26 @@ export default function NotesPage() {
           onCancel={() => setShowDeleteConfirm(false)}
         />
       )}
+      {showTemplates && (
+        <NoteTemplates onSelect={handleTemplateSelect} onClose={() => setShowTemplates(false)} />
+      )}
 
       <aside className="sidebar">
         <div className="sidebar-actions">
           {!isRecording && !processing && (
-            <button className="record-btn" onClick={() => startRecording()}>
-              <span className="record-dot" />
-              New Recording
-            </button>
+            <>
+              <button className="record-btn" onClick={() => startRecording()}>
+                <span className="record-dot" />
+                New Recording
+              </button>
+              <button className="record-btn template-btn" onClick={() => setShowTemplates(true)}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
+                  <rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/>
+                </svg>
+                Template
+              </button>
+            </>
           )}
           {isRecording && (
             <div className="recording-card">
@@ -278,7 +383,12 @@ export default function NotesPage() {
                 type="text" placeholder="Title (optional)" value={title}
                 onChange={(e) => setTitle(e.target.value)} className="title-input"
               />
-              <button className="stop-btn" onClick={handleStop}>Stop & Generate</button>
+              <div className="rec-actions">
+                <button className="pause-btn" onClick={togglePause} title={isPaused ? 'Resume' : 'Pause'}>
+                  {isPaused ? '▶' : '⏸'}
+                </button>
+                <button className="stop-btn" onClick={handleStop}>Stop & Generate</button>
+              </div>
             </div>
           )}
           {processing && (
@@ -315,6 +425,20 @@ export default function NotesPage() {
           </div>
         </div>
 
+        {selectedIds.size > 0 && (
+          <div className="batch-bar">
+            <span className="batch-count">{selectedIds.size} selected</span>
+            <button className="batch-export-btn" onClick={handleBatchExport}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="7 10 12 15 17 10"/>
+                <line x1="12" y1="15" x2="12" y2="3"/>
+              </svg>
+              Export
+            </button>
+            <button className="batch-clear-btn" onClick={() => setSelectedIds(new Set())}>Clear</button>
+          </div>
+        )}
         <div className="notes-list">
           {filteredNotes.length === 0 && !isRecording && (
             <div className="empty-notes">
@@ -333,14 +457,26 @@ export default function NotesPage() {
               {dateNotes.map((note) => (
                 <div
                   key={note.id}
-                  className={`note-item ${selectedNote?.id === note.id ? 'active' : ''}`}
+                  className={`note-item ${selectedNote?.id === note.id ? 'active' : ''} ${selectedIds.has(note.id) ? 'selected' : ''} ${!viewedIds.has(note.id) ? 'unread' : ''}`}
                   onClick={() => handleSelectNote(note)}
                 >
-                  <div className="note-item-title">{note.title}</div>
-                  <div className="note-item-meta">
-                    <span>{note.meetingType}</span>
-                    <span>{note.audioDurationS.toFixed(0)}s</span>
+                  <div className="note-item-check" onClick={(e) => { e.stopPropagation(); toggleSelectNote(note.id); }}>
+                    <div className={`check-box ${selectedIds.has(note.id) ? 'checked' : ''}`}>
+                      {selectedIds.has(note.id) && (
+                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                          <polyline points="20 6 9 17 4 12"/>
+                        </svg>
+                      )}
+                    </div>
                   </div>
+                  <div className="note-item-content">
+                    <div className="note-item-title">{note.title || 'Untitled'}</div>
+                    <div className="note-item-meta">
+                      <span>{note.meetingType}</span>
+                      <span>{note.audioDurationS.toFixed(0)}s</span>
+                    </div>
+                  </div>
+                  {!viewedIds.has(note.id) && <span className="unread-dot" />}
                 </div>
               ))}
             </div>
